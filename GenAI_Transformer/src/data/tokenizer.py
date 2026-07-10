@@ -180,8 +180,12 @@ class MidiTokenizer:
 
         tokens: List[int] = [self.bos_id]
 
-        # Tempo token
-        tempo = midi.estimate_tempo()
+        # Tempo token — estimate_tempo() raises on files with fewer than two notes.
+        # Those files are still usable; only the tempo estimate is unavailable.
+        try:
+            tempo = midi.estimate_tempo()
+        except Exception:
+            tempo = 120.0
         tempo_token = self._quantize_tempo(tempo)
         tokens.append(self.token_to_idx.get(tempo_token, self.unk_id))
 
@@ -473,7 +477,10 @@ class MidiTokenizer:
             return self._default_labels()
 
         # --- Tempo ---
-        tempo = midi.estimate_tempo()
+        try:
+            tempo = midi.estimate_tempo()
+        except Exception:
+            tempo = 120.0
         if tempo < 70:
             tempo_label = "very_slow"
         elif tempo < 90:
