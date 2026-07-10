@@ -76,6 +76,12 @@ class MultiHeadSelfAttention(nn.Module):
             K_cache, V_cache = kv_cache
             seq_len += K_cache.shape[1]
 
+        # QK-Norm must run BEFORE RoPE: LayerNorm re-centers per position and does not
+        # commute with the rotation, which would destroy relative position information.
+        if self.use_qk_norm:
+            Q = self.q_norm(Q)
+            K = self.k_norm(K)
+
         Q, K = self.rope(Q, K, seq_len)
 
         if kv_cache is not None:
@@ -85,11 +91,6 @@ class MultiHeadSelfAttention(nn.Module):
             V = torch.cat([V_cache, V], dim=1)
 
         new_kv_cache = (K, V)
-
-        # Apply QK Norm if enabled
-        if self.use_qk_norm:
-            Q = self.q_norm(Q)
-            K = self.k_norm(K)
 
         # Expand K,V for GQA (repeat groups)
         if self.num_kv_heads != self.num_heads:

@@ -60,6 +60,10 @@ def main():
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--max_seq_len", type=int, default=None)
     parser.add_argument("--max_files", type=int, default=None)
+    parser.add_argument("--grad_accum", type=int, default=None,
+                        help="Override gradient_accumulation_steps from config")
+    parser.add_argument("--num_workers", type=int, default=0,
+                        help="DataLoader workers. 0 is safest on Windows/macOS; use 2-4 on Linux")
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
@@ -134,7 +138,7 @@ def main():
         val_split=0.1,
         labels_file=lf,
         max_files=args.max_files,
-        num_workers=0,  # 0 is safer on Windows; increase for Linux
+        num_workers=args.num_workers,
         seed=seed,
         pretokenize="auto",  # auto for small-medium datasets
     )
@@ -176,7 +180,7 @@ def main():
         num_epochs=num_epochs,
         warmup_ratio=train_cfg.get("warmup_ratio", 0.05),
         max_grad_norm=train_cfg.get("max_grad_norm", 1.0),
-        gradient_accumulation_steps=train_cfg.get("gradient_accumulation_steps", 4),
+        gradient_accumulation_steps=args.grad_accum or train_cfg.get("gradient_accumulation_steps", 4),
         label_smoothing=train_cfg.get("label_smoothing", 0.1),
         checkpoint_dir=paths_cfg.get("checkpoints_dir", "checkpoints"),
         save_every=train_cfg.get("save_every", 5),

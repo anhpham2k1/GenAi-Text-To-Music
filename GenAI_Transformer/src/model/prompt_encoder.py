@@ -8,10 +8,12 @@ Same 6 attributes as GenAI_Diffusion:
 import torch
 import torch.nn as nn
 
+NUM_ATTRIBUTES = 6
+
 
 class PromptEncoder(nn.Module):
     """
-    Attribute embedding → concat → project → (B, 1, d_model) for cross-attention.
+    Attribute embedding → one token per attribute → (B, 6, d_model) for cross-attention.
     """
 
     def __init__(
@@ -39,14 +41,16 @@ class PromptEncoder(nn.Module):
         self.instrument_emb = nn.Embedding(num_instruments, instrument_dim)
         self.energy_emb = nn.Embedding(num_energies, energy_dim)
 
-        concat_dim = mood_dim + genre_dim + scene_dim + tempo_dim + instrument_dim + energy_dim
-
-        self.projection = nn.Sequential(
-            nn.Linear(concat_dim, d_model),
-            nn.GELU(),
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
+        # One projection per attribute → each becomes its own conditioning token.
+        # A single fused token would make cross-attention softmax degenerate to 1.0.
+        self.attr_projections = nn.ModuleList(
+            [
+                nn.Linear(dim, d_model)
+                for dim in (mood_dim, genre_dim, scene_dim, tempo_dim, instrument_dim, energy_dim)
+            ]
         )
+        self.attr_type_emb = nn.Parameter(torch.zeros(NUM_ATTRIBUTES, d_model))
+        self.norm = nn.LayerNorm(d_model)
         self.d_model = d_model
 
     def forward(
@@ -58,19 +62,19 @@ class PromptEncoder(nn.Module):
         instrument: torch.Tensor,
         energy: torch.Tensor,
     ) -> torch.Tensor:
-        emb = torch.cat(
-            [
-                self.mood_emb(mood),
-                self.genre_emb(genre),
-                self.scene_emb(scene),
-                self.tempo_emb(tempo),
-                self.instrument_emb(instrument),
-                self.energy_emb(energy),
-            ],
-            dim=-1,
-        )
-        prompt_emb = self.projection(emb)
-        return prompt_emb.unsqueeze(1)  # (B, 1, d_model)
+        embeddings = [
+            self.mood_emb(mood),
+            self.genre_emb(genre),
+            self.scene_emb(scene),
+            self.tempo_emb(tempo),
+            self.instrument_emb(instrument),
+            self.energy_emb(energy),
+        ]
+        tokens = [
+            proj(emb) + self.attr_type_emb[i]
+            for i, (proj, emb) in enumerate(zip(self.attr_projections, embeddings))
+        ]
+        return self.norm(torch.stack(tokens, dim=1))  # (B, 6, d_model)
 
     @property
     def output_dim(self) -> int:

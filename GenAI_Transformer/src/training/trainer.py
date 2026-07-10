@@ -424,15 +424,18 @@ class Trainer:
                     )
                     loss = loss / self.gradient_accumulation_steps
 
+                # Robustness: drop the batch before it can poison accumulated gradients
+                if not torch.isfinite(loss):
+                    print(f"[WARNING] Non-finite loss at step {step}. Skipping batch.")
+                    self.optimizer.zero_grad()
+                    accumulated = 0
+                    continue
+
                 self.scaler.scale(loss).backward()
 
                 total_loss += loss.item() * self.gradient_accumulation_steps
                 num_batches += 1
                 accumulated += 1
-
-                # Robustness: detect NaN
-                if torch.isnan(loss):
-                    print(f"[WARNING] NaN loss detected at step {step}. Skipping update.")
 
                 # Update progress bar
                 current_lr = self.scheduler.get_lr()

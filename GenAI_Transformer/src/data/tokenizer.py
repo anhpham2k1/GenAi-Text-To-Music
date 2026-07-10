@@ -200,15 +200,16 @@ class MidiTokenizer:
                 tokens.extend(time_tokens)
                 current_time = event["time"]
 
-            # --- Instrument change ---
-            if event.get("instrument") != current_instrument:
-                current_instrument = event["instrument"]
-                inst_token = f"INST_{current_instrument}"
-                if inst_token in self.token_to_idx:
-                    tokens.append(self.token_to_idx[inst_token])
-
             # --- Note events ---
             if event["type"] == "note_on":
+                # Instrument change — only note_on carries timbre. Emitting INST on
+                # note_off would retag the next note with another track's instrument.
+                if event["instrument"] != current_instrument:
+                    current_instrument = event["instrument"]
+                    inst_token = f"INST_{current_instrument}"
+                    if inst_token in self.token_to_idx:
+                        tokens.append(self.token_to_idx[inst_token])
+
                 # Velocity
                 vel_bin = min(event["velocity"] // 4, self.velocity_bins - 1)
                 tokens.append(self.token_to_idx[f"VEL_{vel_bin}"])
@@ -275,8 +276,16 @@ class MidiTokenizer:
                     }
                 )
 
-        # Sort by time, note_off before note_on at same time
-        events.sort(key=lambda x: (x["time"], 0 if x["type"] == "note_off" else 1))
+        # Sort by time, note_off before note_on at same time, then group by instrument
+        # so simultaneous notes of one track do not interleave into INST token churn.
+        events.sort(
+            key=lambda x: (
+                x["time"],
+                0 if x["type"] == "note_off" else 1,
+                x["instrument"],
+                x["pitch"],
+            )
+        )
         return events
 
     def _quantize_tempo(self, bpm: float) -> str:
@@ -323,8 +332,9 @@ class MidiTokenizer:
         current_program = 0  # Piano
 
         instruments: Dict[int, pretty_midi.Instrument] = {}
-        active_notes: Dict[int, Tuple[float, int, int]] = {}
-        # active_notes[pitch] = (start_time, velocity, program)
+        active_notes: Dict[int, List[Tuple[float, int, int]]] = {}
+        # active_notes[pitch] = [(start_time, velocity, program), ...] — FIFO, so two
+        # tracks sounding the same pitch close in note_on order instead of overwriting.
 
         for token_id in token_ids:
             token_str = self.idx_to_token.get(token_id, UNK_TOKEN)
@@ -356,11 +366,11 @@ class MidiTokenizer:
                     "ORGAN": 16,
                     "GUITAR": 24,
                     "BASS": 32,
-                    "STRINGS": 48,
+                    "STRINGS": 40,
                     "ENSEMBLE": 48,
                     "BRASS": 56,
                     "REED": 64,
-                    "PIPE": 73,
+                    "PIPE": 72,
                     "SYNTH_LEAD": 80,
                     "SYNTH_PAD": 88,
                     "SYNTH_FX": 96,
@@ -373,10 +383,8 @@ class MidiTokenizer:
             elif token_str.startswith("NOTE_ON_"):
                 try:
                     pitch = int(token_str.split("_")[-1])
-                    active_notes[pitch] = (
-                        current_time,
-                        current_velocity,
-                        current_program,
+                    active_notes.setdefault(pitch, []).append(
+                        (current_time, current_velocity, current_program)
                     )
                 except ValueError:
                     continue
@@ -384,8 +392,8 @@ class MidiTokenizer:
             elif token_str.startswith("NOTE_OFF_"):
                 try:
                     pitch = int(token_str.split("_")[-1])
-                    if pitch in active_notes:
-                        start, vel, prog = active_notes.pop(pitch)
+                    if active_notes.get(pitch):
+                        start, vel, prog = active_notes[pitch].pop(0)
                         duration = current_time - start
                         if duration < 0.01:
                             duration = 0.1  # Minimum duration 100ms
@@ -419,17 +427,18 @@ class MidiTokenizer:
                 pass
 
         # Close remaining active notes
-        for pitch, (start, vel, prog) in active_notes.items():
-            if prog not in instruments:
-                instruments[prog] = pretty_midi.Instrument(program=prog)
-            instruments[prog].notes.append(
-                pretty_midi.Note(
-                    velocity=vel,
-                    pitch=pitch,
-                    start=start,
-                    end=max(current_time, start + 0.1),
+        for pitch, pending in active_notes.items():
+            for start, vel, prog in pending:
+                if prog not in instruments:
+                    instruments[prog] = pretty_midi.Instrument(program=prog)
+                instruments[prog].notes.append(
+                    pretty_midi.Note(
+                        velocity=vel,
+                        pitch=pitch,
+                        start=start,
+                        end=max(current_time, start + 0.1),
+                    )
                 )
-            )
 
         # Add instruments to MIDI
         for inst in instruments.values():
