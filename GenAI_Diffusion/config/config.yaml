@@ -1,0 +1,66 @@
+# Improved Conditional Piano-roll Diffusion
+# Same dataset as GenAI_Transformer Transformer — quality-oriented defaults
+
+model:
+  base_channels: 64          # was 32 — more capacity
+  channel_mults: [1, 2, 4]
+  time_dim: 256
+  cond_dim: 256
+  dropout: 0.1
+  use_mid_attn: true         # long-range rhythm/harmony
+  attn_heads: 4
+
+pianoroll:
+  pitch_min: 21
+  pitch_max: 108             # 88 pitches
+  n_frames: 256              # was 128 — ~10.6s @ fs=24
+  fs: 24                     # was 16 — finer timing
+  velocity_normalize: true
+  pitch_shift_max: 2         # train aug ±semitone
+  random_crop: true
+
+diffusion:
+  timesteps: 1000
+  beta_start: 0.0001
+  beta_end: 0.02
+  schedule: cosine           # better than linear for quality
+  sample_steps: 80           # more DDIM steps → cleaner rolls
+  cond_drop_prob: 0.1        # CFG training
+  guidance_scale: 3.5        # CFG at inference (2–5 typical)
+  eta: 0.0                   # 0 = deterministic DDIM
+
+prompt:
+  num_moods: 10
+  num_genres: 10
+  num_scenes: 10
+  num_tempos: 5
+  num_instruments: 8
+  num_energies: 5
+
+training:
+  batch_size: 4              # larger roll → smaller batch (raise if VRAM ok)
+  gradient_accumulation_steps: 4
+  num_epochs: 30             # 10 is thin; 30–50 recommended for quality
+  learning_rate: 1.5e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  ema_decay: 0.999
+  use_ema: true
+  save_epochs: [1, 5, 10, 20, 30]
+  eval_every: 1
+  num_workers: 0
+
+paths:
+  # Shared Ky3/data (old + new datasets)
+  data_dir: "../data/processed"
+  labels_file: "../data/labels/labels.json"
+  split_file: "../compare/split.json"
+  checkpoints_dir: "checkpoints"
+  outputs_dir: "outputs"
+  logs_dir: "logs"
+  results_dir: "../compare/results"
+  eval_prompts: "../compare/eval_prompts.json"
+
+device: "auto"
+seed: 42
+method_name: "diffusion"

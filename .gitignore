@@ -1,0 +1,62 @@
+# ============================================================
+# Text-to-Music (Ky3) — .gitignore
+# ============================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+.venv/
+venv/
+env/
+
+# --- Data ---
+# Raw MIDI sources are huge (MidiCaps, MAESTRO, ComMU, ...) — do not commit
+data/raw/
+
+# Train set (processed + labels) is kept for training/repro — NOT ignored:
+#   data/processed/
+#   data/labels/
+
+# --- Model checkpoints (both projects — do not commit) ---
+**/checkpoints/
+GenAI_Transformer/checkpoints/
+GenAI_Diffusion/checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# --- Logs / run outputs ---
+**/logs/
+**/outputs/
+**/runs/
+**/wandb/
+
+# Comparison run outputs (regenerate via scripts)
+compare/results/*.csv
+compare/outputs/
+
+# --- Sound / audio cache ---
+**/soundfonts/*.sf2
+*.wav
+# keep .mid in data/processed if committed; ignore generated mid elsewhere optional
+GenAI_Transformer/outputs/
+GenAI_Diffusion/outputs/
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Temp / archives ---
+*.bak
+*.tmp
+*.zip
+*.tar
+*.tar.gz
+temp_*/

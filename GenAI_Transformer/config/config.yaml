@@ -1,0 +1,82 @@
+# ============================================================
+# Text-to-Music: Configuration
+# ============================================================
+
+# --- Model ---
+model:
+  d_model: 256
+  num_heads: 8
+  num_layers: 6
+  d_ff: 1024
+  max_seq_len: 2048
+  dropout: 0.1
+  num_kv_heads: 4          # GQA for faster inference & smaller KV cache
+  use_qk_norm: true
+  weight_tying: true
+
+# --- Tokenizer ---
+tokenizer:
+  pitch_range: [21, 108]       # Piano range (A0 to C8)
+  velocity_bins: 32
+  time_shift_bins: 100          # 10ms per bin, max 1000ms
+  tempo_bins: 8
+  num_instrument_groups: 16
+
+# --- Prompt ---
+prompt:
+  num_moods: 10
+  num_genres: 10
+  num_scenes: 10
+  num_tempos: 5
+  num_instruments: 8
+  num_energies: 5
+  mood_dim: 64
+  genre_dim: 64
+  scene_dim: 64
+  tempo_dim: 32
+  instrument_dim: 32
+  energy_dim: 32
+
+# --- Training ---
+training:
+  batch_size: 16
+  gradient_accumulation_steps: 4
+  num_epochs: 50
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.98]
+  eps: 1.0e-9
+  warmup_ratio: 0.05
+  max_grad_norm: 1.0
+  label_smoothing: 0.1
+  early_stopping_patience: 10
+  eval_every: 1
+  save_every: 5
+
+# --- Inference ---
+inference:
+  temperature: 0.85
+  top_p: 0.9
+  top_k: 50
+  max_length: 2048
+  default_duration: 30         # seconds
+
+# --- Audio Rendering ---
+audio:
+  soundfont: "soundfonts/FluidR3_GM.sf2"
+  sample_rate: 44100
+
+# --- Paths (shared dataset at Ky3/data) ---
+paths:
+  data_dir: "../data"
+  raw_midi_dir: "../data/raw"
+  processed_dir: "../data/processed"
+  labels_dir: "../data/labels"
+  checkpoints_dir: "checkpoints"
+  outputs_dir: "outputs"
+  logs_dir: "logs"
+  soundfonts_dir: "soundfonts"
+
+# --- Device ---
+device: "auto"                  # "auto", "cuda", "cpu"
+seed: 42

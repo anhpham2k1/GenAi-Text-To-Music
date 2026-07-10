@@ -1,0 +1,38 @@
+# Data directories
+data/raw/
+
+
+# Do not ignore labels as they are small and useful for tracking dataset state
+# (If labels.json gets too large, you might want to ignore it later)
+# data/labels/
+
+# Model checkpoints and logs
+checkpoints/
+logs/
+outputs/
+runs/
+wandb/
+
+# Python and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+env.bak/
+venv.bak/
+
+# Temporary and IDE files
+*.zip
+*.tar.gz
+*.tmp
+.vscode/
+.idea/
+.DS_Store
+temp_*/
+
+# Temp sampling scripts if any
+sample_midicaps.py

@@ -1,0 +1,32 @@
+# ============================================================
+# Text-to-Music: Dependencies
+# ============================================================
+
+# Core
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Music Processing
+pretty_midi>=0.2.10
+mido>=1.3.0
+midi2audio>=0.1.1
+
+# Data & NLP
+transformers>=4.30.0
+pandas>=2.0.0
+tqdm>=4.65.0
+pyyaml>=6.0
+
+# Visualization
+tensorboard>=2.13.0
+matplotlib>=3.7.0
+
+# API
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-multipart>=0.0.6
+
+# Utilities
+colorama>=0.4.6
