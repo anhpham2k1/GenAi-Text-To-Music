@@ -50,6 +50,31 @@ INSTRUMENT_GROUPS = [
     "SYNTH_FX", "ETHNIC", "PERCUSSIVE", "SFX"
 ]
 
+# GM group index (program // 8) → prompt label. Keys must stay inside the 8 classes of
+# INSTRUMENT_MAP in dataset.py; an unknown label silently degrades to piano (id 0) there.
+GM_GROUP_TO_LABEL = {
+    0: "piano",            # Acoustic/Electric Piano
+    1: "piano",            # Chromatic Percussion — closest keyed timbre
+    2: "organ",
+    3: "guitar",
+    4: "guitar",           # Bass — no dedicated prompt class
+    5: "strings",
+    6: "strings",          # Ensemble
+    7: "brass",
+    8: "flute",            # Reed
+    9: "flute",            # Pipe (flute lives here in GM)
+    10: "synth",           # Synth Lead
+    11: "synth",           # Synth Pad
+    12: "synth",           # Synth FX
+    13: "strings",         # Ethnic — mostly plucked/bowed
+    14: "piano",           # Percussive
+    15: "synth",           # SFX
+}
+
+# A piece is "full_orchestra" when no single group dominates and several groups play.
+FULL_ORCHESTRA_MAX_SHARE = 0.5
+FULL_ORCHESTRA_MIN_GROUPS = 3
+
 
 class MidiTokenizer:
     """
@@ -492,30 +517,29 @@ class MidiTokenizer:
         else:
             tempo_label = "very_fast"
 
-        # --- Instrument (cải tiến: hỗ trợ nhiều nhóm hơn) ---
-        programs = set()
-        has_drums = any(inst.is_drum for inst in midi.instruments)
+        # --- Instrument ---
+        # Label by the group that carries the most NOTES, not by mere presence of a
+        # program. An elif-chain on presence tags a piano piece as "strings" over three
+        # stray violin notes, which decorrelates the label from what the file sounds like.
+        notes_per_group: Dict[int, int] = {}
         for inst in midi.instruments:
-            if not inst.is_drum:
-                programs.add(inst.program)
+            if inst.is_drum:
+                continue
+            group = min(inst.program // 8, len(INSTRUMENT_GROUPS) - 1)
+            notes_per_group[group] = notes_per_group.get(group, 0) + len(inst.notes)
 
-        instrument_label = "piano"
-        if any(48 <= p < 56 for p in programs) or any(40 <= p < 48 for p in programs):
-            instrument_label = "strings"
-        elif any(56 <= p < 64 for p in programs):
-            instrument_label = "brass"
-        elif any(24 <= p < 32 for p in programs) or any(32 <= p < 40 for p in programs):
-            instrument_label = "guitar"
-        elif any(73 <= p < 80 for p in programs) or any(64 <= p < 72 for p in programs):
-            instrument_label = "woodwind"  # flute, reed etc.
-        elif any(0 <= p < 8 for p in programs):
+        if not notes_per_group:
             instrument_label = "piano"
-        elif any(80 <= p < 104 for p in programs):
-            instrument_label = "synth"
-        elif len(programs) > 3:
-            instrument_label = "full_orchestra"
-        if has_drums and len(programs) > 2:
-            instrument_label = "full_orchestra"
+        else:
+            dominant = max(notes_per_group, key=notes_per_group.get)
+            total = sum(notes_per_group.values())
+            share = notes_per_group[dominant] / total
+
+            # No single group carries the piece and several groups play → ensemble.
+            if share < FULL_ORCHESTRA_MAX_SHARE and len(notes_per_group) >= FULL_ORCHESTRA_MIN_GROUPS:
+                instrument_label = "full_orchestra"
+            else:
+                instrument_label = GM_GROUP_TO_LABEL.get(dominant, "piano")
 
         # --- Energy (note density + polyphony) ---
         total_notes = sum(len(inst.notes) for inst in midi.instruments)
@@ -571,10 +595,10 @@ class MidiTokenizer:
         if instrument_label in ["brass", "full_orchestra"] and energy_label in ["high", "intense"]:
             genre_label = "epic"
             scene_label = "battlefield"
-        elif instrument_label == "synth" or "synth" in str(programs):
+        elif instrument_label == "synth":
             genre_label = "sci-fi"
             scene_label = "space"
-        elif instrument_label in ["strings", "woodwind"] and energy_label in ["calm", "low"]:
+        elif instrument_label in ["strings", "flute"] and energy_label in ["calm", "low"]:
             genre_label = "adventure"
             scene_label = "forest"
         elif energy_label == "intense" or tempo_label == "very_fast":

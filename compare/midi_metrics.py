@@ -23,17 +23,19 @@ INSTRUMENT_GROUPS = [
     "synth_fx", "ethnic", "percussive", "sfx",
 ]
 
-# Prompt instrument label -> acceptable GM program groups
+# Prompt instrument label -> acceptable GM program groups.
+# Must mirror GM_GROUP_TO_LABEL in GenAI_Transformer/src/data/tokenizer.py: a label the
+# tokenizer assigns to a group must be scored as a hit for that same group, otherwise the
+# model is penalised for reproducing exactly what it was trained on.
 INSTRUMENT_MATCH = {
-    "piano": {0},
-    "strings": {5, 6},
+    "piano": {0, 1, 14},          # + Chromatic Percussion, Percussive
+    "strings": {5, 6, 13},        # + Ensemble, Ethnic
     "brass": {7},
-    "flute": {8, 9},
-    "guitar": {3},
+    "flute": {8, 9},              # Reed, Pipe
+    "guitar": {3, 4},             # + Bass (no dedicated prompt class)
     "organ": {2},
-    "synth": {10, 11, 12},
-    "full_orchestra": {0, 5, 6, 7, 8, 9},
-    "woodwind": {8, 9},
+    "synth": {10, 11, 12, 15},    # + SFX
+    "full_orchestra": set(range(16)),  # diffuse by definition — any group counts
 }
 
 
