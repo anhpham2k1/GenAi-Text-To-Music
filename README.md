@@ -64,6 +64,62 @@ cd D:\Master\Ky3\GenAI_Diffusion
 python train.py --epochs 10 --batch_size 4
 ```
 
+---
+
+## Vì sao đổi config để train lại (Transformer)
+
+Lần train đầu (50 epoch, V100) kết thúc với:
+
+```
+Epoch  50/50 │ Train Loss: 3.8750 │ Val Loss: 3.9905 │ LR: 1.00e-06 │ PPL: 54.1
+```
+
+**Chẩn đoán: under-fit, KHÔNG phải over-fit.**
+
+| Dấu hiệu | Số liệu | Ý nghĩa |
+|----------|---------|---------|
+| Khoảng cách train/val | chỉ **0.115** (3.875 vs 3.990) | Nếu over-fit, val loss phải **tăng** khi train loss giảm. Ở đây val loss giảm đều tới epoch cuối, epoch 50 vẫn là "new best" |
+| Loss cuối | PPL **54.1**, còn cao | Hai loss bám sát nhau và đều cao → model **chưa đủ sức học**, không phải học thuộc lòng |
+| LR cuối | chạm đáy **1.0e-06** | 5 epoch cuối chỉ cải thiện val loss **0.0002** → model đứng yên vì **hết learning rate**, không phải vì "chưa train xong" |
+
+→ Tăng epoch suông **không giải quyết được gì**: LR đã về 0, model không học thêm nữa.
+
+Lưu ý: `num_epochs` **định hình luôn lịch LR** (warmup + cosine tính trên tổng số step). Nên tăng `num_epochs` không phải là "train thêm", mà là **giãn lịch cosine ra**, giữ LR ở mức cao lâu hơn — đó mới là chỗ có tác dụng.
+
+### Thay đổi
+
+| Config | Cũ | Mới | Lý do |
+|--------|-----|-----|-------|
+| `d_model` | 256 | **512** | Tăng capacity — đòn bẩy mạnh nhất, đánh trúng nguyên nhân under-fit |
+| `num_layers` | 6 | **8** | 〃 |
+| `d_ff` | 1024 | **2048** | 〃 |
+| `num_heads` | 8 | **8** (giữ) | `d_model` phải chia hết cho `num_heads`; 512/8 = 64 dim/head là chuẩn. Tăng head mà không tăng `d_model` chỉ làm mỗi head *hẹp* đi |
+| `learning_rate` | 1.0e-4 | **3.0e-4** | Quan trọng ngang việc tăng model. LR cũ quá thấp, chạm đáy rồi đứng yên |
+| `num_epochs` | 50 | **100** | Giãn lịch cosine, giữ LR cao lâu hơn |
+| `batch_size` | 16 | **32** | V100 32GB dư sức (bản cũ 16 là để né card 6GB) |
+| `gradient_accumulation_steps` | 4 | **2** | 32×2 = **effective batch 64, giữ nguyên** như cũ |
+| `early_stopping_patience` | 10 | **10** (giữ) | Lưới an toàn: nếu over-fit thật, tự dừng, không tốn giờ GPU oan |
+
+Model: **7.65M → ~28M params**.
+
+Không dùng `--batch_size 64 --grad_accum 1` ngay từ đầu vì attention tốn bộ nhớ theo **bình phương** seq length (2048), mà model vừa to gấp đôi. Nếu chạy trơn và VRAM còn dư nhiều thì đổi sang 64+1 để nhanh hơn.
+
+### Chạy lại
+
+Phải train **từ đầu**, KHÔNG `--resume`: checkpoint cũ có kiến trúc khác (`d_model` 256), load sẽ lỗi shape mismatch.
+
+```bash
+cd GenAI_Transformer
+python3 train.py --max_files 500 --epochs 2 --num_workers 8   # smoke test, bắt OOM sớm
+python3 train.py --num_workers 8                              # train thật
+```
+
+Nếu `CUDA out of memory` → hạ `--batch_size 16 --grad_accum 4`.
+
+> **Bẫy đã gặp:** thiếu `pretty_midi` thì **mọi file MIDI fail tokenize âm thầm** (`dataset.py` chỉ warn rồi bỏ qua), model học chuỗi rỗng và cho val loss ~1.0 / PPL ~2.7 — **đẹp giả tạo**. Loss thật phải bắt đầu quanh **6.1**. Luôn smoke test trước khi đốt giờ GPU.
+
+---
+
 ## Generate
 
 ```powershell
