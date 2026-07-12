@@ -519,10 +519,15 @@ class Trainer:
             "global_step": self.global_step,
             "best_val_loss": self.best_val_loss,
             "epoch": epoch or 0,
+            # Record the full architecture: a checkpoint that only stores
+            # d_model cannot be rebuilt once config.yaml changes.
             "config": {
                 "vocab_size": self.model.vocab_size,
                 "d_model": self.model.d_model,
                 "max_seq_len": self.model.max_seq_len,
+                "num_layers": len(self.model.decoder_blocks),
+                "num_heads": self.model.decoder_blocks[0].self_attn.num_heads,
+                "d_ff": self.model.decoder_blocks[0].ffn.w1.out_features,
             },
         }
         if self.scaler:

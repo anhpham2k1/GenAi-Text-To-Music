@@ -98,12 +98,38 @@ class MidiRenderer:
             print(f"[Renderer] WAV saved (midi2audio): {wav_path}")
             return wav_path
         except ImportError:
-            print("[ERROR] midi2audio not installed. pip install midi2audio")
-            print("[INFO] MIDI file was saved but WAV rendering requires FluidSynth.")
-            print("  Install FluidSynth: https://www.fluidsynth.org/")
-            return midi_path
+            print("[WARNING] midi2audio not installed.")
+            return self._render_synthesize(midi_path, wav_path)
         except Exception as e:
-            print(f"[ERROR] midi2audio failed: {e}")
+            print(f"[WARNING] midi2audio failed: {e}")
+            return self._render_synthesize(midi_path, wav_path)
+
+    def _render_synthesize(self, midi_path: str, wav_path: str) -> str:
+        """Last-resort fallback: pure-Python sine synthesis (no FluidSynth/SoundFont).
+
+        Timbre is crude, but it guarantees playable audio on any machine — the
+        web demo has no other way to preview a MIDI file in a browser.
+        """
+        try:
+            import numpy as np
+            import pretty_midi
+            from scipy.io import wavfile
+
+            midi = pretty_midi.PrettyMIDI(midi_path)
+            audio = midi.synthesize(fs=self.sample_rate)
+            if audio is None or len(audio) == 0:
+                print("[WARNING] Nothing to synthesize (empty MIDI)")
+                return midi_path
+
+            peak = float(np.abs(audio).max())
+            if peak > 0:
+                audio = audio / peak * 0.9
+            wavfile.write(wav_path, self.sample_rate, (audio * 32767).astype(np.int16))
+            print(f"[Renderer] WAV saved (sine synthesis): {wav_path}")
+            return wav_path
+        except Exception as e:
+            print(f"[ERROR] Sine synthesis failed: {e}")
+            print("[INFO] MIDI saved, but no WAV. Install FluidSynth for real timbres.")
             return midi_path
 
     def _check_fluidsynth(self) -> bool:

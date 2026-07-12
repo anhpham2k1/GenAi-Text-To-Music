@@ -141,13 +141,29 @@ python -m compare.compare_results
 # → compare/results/comparison_table.csv
 ```
 
-## API (tùy chọn)
+## Web demo
 
 ```powershell
-cd D:\Master\Ky3\GenAI_Transformer
+cd GenAI_Transformer
 uvicorn api.main:app --host 0.0.0.0 --port 8000
-# Docs: http://localhost:8000/docs
 ```
+
+Mở **http://localhost:8000** — chọn 6 thuộc tính, chỉnh temperature/top-p/độ dài, bấm **Sinh nhạc**: nghe trực tiếp, xem piano-roll, tải MIDI/WAV. API docs ở `/docs`.
+
+**Web dùng config riêng: [api/config.web.yaml](GenAI_Transformer/api/config.web.yaml)** — độc lập hoàn toàn với `config/config.yaml` của training, nên bạn đổi config train thoải mái mà web không vỡ.
+
+Cơ chế: **kiến trúc model được suy trực tiếp từ checkpoint** (`src/inference/model_loader.py`), không đọc từ YAML. Lý do — checkpoint chỉ lưu `d_model`, còn `num_layers`/`d_ff` thì không; trước đây API lấy `d_model` từ checkpoint nhưng `num_layers` từ `config.yaml`, nên **sửa config sau khi train là API vỡ ngay** (shape mismatch). Nay `d_model`, `num_layers`, `num_heads`, `d_ff`, `num_kv_heads`, weight-tying và cả prompt-embedding đều đọc từ chính weights.
+
+Đổi model phục vụ web — sửa `checkpoint:` trong `api/config.web.yaml`, hoặc:
+
+```powershell
+$env:CHECKPOINT = "checkpoints/checkpoint_epoch_50.pt"    # so sánh model theo epoch
+uvicorn api.main:app --port 8000
+```
+
+Thanh badge trên web hiển thị **params / d_model / layers / epoch / val loss** của checkpoint đang chạy — để không bao giờ nhầm lẫn đang demo bằng model nào. Nếu không có checkpoint, web báo đỏ "model random" thay vì im lặng sinh nhiễu.
+
+**Về âm thanh:** có FluidSynth + SoundFont thì WAV ra tiếng nhạc cụ thật. Không có thì tự động fallback sang **sine synthesis** (thuần Python, tiếng thô nhưng luôn phát được trên trình duyệt) — nên demo chạy được trên máy sạch, không cần cài gì thêm.
 
 ---
 

@@ -23,7 +23,8 @@ class MusicRequest(BaseModel):
 class MusicResponse(BaseModel):
     request_id: str
     midi_url: str
-    wav_url: str
+    wav_url: Optional[str] = None   # null when no synth backend is available
+    wav_available: bool = False
     duration: float
     num_notes: int
     prompt_text: str  # display summary of structured attrs

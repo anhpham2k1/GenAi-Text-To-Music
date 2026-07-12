@@ -1,0 +1,25 @@
+# ============================================================
+# Web demo config — độc lập hoàn toàn với config/config.yaml (training).
+#
+# KHÔNG có mục `model:` / `prompt:` ở đây. Kiến trúc model (d_model,
+# num_layers, prompt embedding...) được suy TRỰC TIẾP từ checkpoint, nên
+# bạn đổi config training thoải mái mà web không bao giờ vỡ.
+# ============================================================
+
+# Checkpoint web sẽ phục vụ. Đổi sang checkpoint_epoch_50.pt, hoặc trỏ tới
+# model 40M sau khi train xong. Env var CHECKPOINT ghi đè giá trị này.
+checkpoint: "checkpoints/best_model.pt"
+
+# Giá trị mặc định của form trên web (người dùng vẫn chỉnh được bằng slider).
+inference:
+  temperature: 0.85
+  top_p: 0.9
+  duration_sec: 30
+
+# Render WAV. Có FluidSynth + SoundFont thì tiếng nhạc cụ thật; không có thì
+# tự động fallback sang sine synthesis (thuần Python, tiếng thô nhưng luôn chạy).
+audio:
+  soundfont: "soundfonts/FluidR3_GM.sf2"
+  sample_rate: 44100
+
+device: "auto"          # "auto" | "cuda" | "cpu"

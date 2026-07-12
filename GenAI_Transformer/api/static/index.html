@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Text-to-Music — Music Transformer</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2129;
+    --border: #2b323c;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #7c5cff;
+    --accent-2: #22d3a6;
+    --danger: #f0883e;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 64px; }
+
+  header { margin-bottom: 28px; }
+  h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 14px; }
+
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .badge {
+    font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  }
+  .badge b { color: var(--text); font-weight: 600; }
+  .badge.warn { border-color: var(--danger); color: var(--danger); }
+
+  .grid { display: grid; grid-template-columns: 380px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+  }
+  .card h2 { margin: 0 0 16px; font-size: 15px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+
+  label { display: block; font-size: 13px; margin-bottom: 6px; color: var(--muted); }
+  .field { margin-bottom: 14px; }
+  select, input[type=range] { width: 100%; }
+  select {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 10px; font-size: 14px; appearance: none;
+  }
+  select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .slider-head { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+  .slider-head span:last-child { color: var(--accent-2); font-variant-numeric: tabular-nums; }
+  input[type=range] { accent-color: var(--accent); }
+
+  button {
+    width: 100%; padding: 12px; font-size: 15px; font-weight: 600;
+    background: var(--accent); color: #fff; border: 0;
+    border-radius: 8px; cursor: pointer; margin-top: 8px;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+  .empty { color: var(--muted); font-size: 14px; text-align: center; padding: 56px 20px; }
+  .spinner {
+    width: 22px; height: 22px; margin: 0 auto 14px;
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .stats { display: flex; flex-wrap: wrap; gap: 20px; margin: 16px 0; }
+  .stat .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .stat .v { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  audio { width: 100%; margin: 6px 0 16px; }
+  canvas { width: 100%; height: 260px; display: block; background: var(--panel-2); border-radius: 8px; border: 1px solid var(--border); }
+
+  .links { display: flex; gap: 10px; margin-top: 16px; }
+  .links a {
+    flex: 1; text-align: center; padding: 9px; font-size: 14px; text-decoration: none;
+    color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  .links a:hover { border-color: var(--accent); }
+
+  .note { font-size: 13px; color: var(--muted); margin-top: 14px; padding: 10px 12px;
+          background: var(--panel-2); border-left: 2px solid var(--danger); border-radius: 4px; }
+  .prompt { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .err { color: var(--danger); font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🎼 Text-to-Music Generator</h1>
+    <div class="sub">Sinh nhạc nền game từ prompt có cấu trúc — Music Transformer (autoregressive, REMI tokens)</div>
+    <div class="badges" id="badges"><span class="badge">Đang tải model…</span></div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Prompt</h2>
+
+      <div class="row">
+        <div class="field">
+          <label for="mood">Mood</label>
+          <select id="mood"></select>
+        </div>
+        <div class="field">
+          <label for="genre">Genre</label>
+          <select id="genre"></select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="scene">Scene</label>
+          <select id="scene"></select>
+        </div>
+        <div class="field">
+          <label for="tempo">Tempo</label>
+          <select id="tempo"></select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="instrument">Instrument</label>
+          <select id="instrument"></select>
+        </div>
+        <div class="field">
+          <label for="energy">Energy</label>
+          <select id="energy"></select>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="slider-head"><span>Độ dài</span><span id="durVal">30s</span></div>
+        <input type="range" id="duration" min="5" max="120" step="5" value="30">
+      </div>
+
+      <div class="field">
+        <div class="slider-head"><span>Temperature</span><span id="tempVal">0.85</span></div>
+        <input type="range" id="temperature" min="0.1" max="1.5" step="0.05" value="0.85">
+      </div>
+
+      <div class="field">
+        <div class="slider-head"><span>Top-p</span><span id="toppVal">0.90</span></div>
+        <input type="range" id="top_p" min="0.1" max="1.0" step="0.05" value="0.9">
+      </div>
+
+      <button id="go">Sinh nhạc</button>
+    </div>
+
+    <div class="card">
+      <h2>Kết quả</h2>
+      <div id="out"><div class="empty">Chọn thuộc tính và bấm <b>Sinh nhạc</b>.</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const OPTIONS = {
+  mood: ["happy","sad","tense","peaceful","epic","mysterious","dark","heroic","nostalgic","playful"],
+  genre: ["fantasy","sci-fi","horror","adventure","rpg","puzzle","platformer","simulation","fighting","racing"],
+  scene: ["forest","dungeon","village","castle","ocean","space","mountain","desert","city","battlefield"],
+  tempo: ["very_slow","slow","moderate","fast","very_fast"],
+  instrument: ["piano","strings","brass","flute","guitar","organ","synth","full_orchestra"],
+  energy: ["calm","low","medium","high","intense"],
+};
+const DEFAULTS = { mood:"peaceful", genre:"fantasy", scene:"village", tempo:"moderate", instrument:"piano", energy:"medium" };
+
+for (const [key, vals] of Object.entries(OPTIONS)) {
+  const sel = document.getElementById(key);
+  for (const v of vals) {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = v.replace(/_/g, " ");
+    if (v === DEFAULTS[key]) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
+const bind = (id, out, fmt) => {
+  const el = document.getElementById(id), lab = document.getElementById(out);
+  const upd = () => lab.textContent = fmt(el.value);
+  el.addEventListener("input", upd); upd();
+};
+bind("duration", "durVal", v => v + "s");
+bind("temperature", "tempVal", v => parseFloat(v).toFixed(2));
+bind("top_p", "toppVal", v => parseFloat(v).toFixed(2));
+
+// Model provenance — surfaced so the demo never silently misrepresents
+// which checkpoint produced the audio.
+fetch("/model_info").then(r => r.json()).then(m => {
+  const b = document.getElementById("badges");
+  if (!m.trained) {
+    b.innerHTML = '<span class="badge warn">⚠ Chưa có checkpoint — model random, nhạc sẽ là nhiễu</span>';
+    return;
+  }
+  const items = [
+    `<span class="badge"><b>${m.params_m}M</b> params</span>`,
+    `<span class="badge">d_model <b>${m.d_model}</b> · layers <b>${m.num_layers}</b></span>`,
+    `<span class="badge">epoch <b>${m.epoch}</b></span>`,
+    m.best_val_loss ? `<span class="badge">val loss <b>${m.best_val_loss.toFixed(3)}</b></span>` : "",
+    `<span class="badge"><b>${m.device}</b></span>`,
+  ];
+  b.innerHTML = items.join("");
+});
+
+const out = document.getElementById("out");
+const go = document.getElementById("go");
+
+go.addEventListener("click", async () => {
+  go.disabled = true;
+  out.innerHTML = '<div class="empty"><div class="spinner"></div>Đang sinh nhạc… (vài giây đến vài chục giây)</div>';
+
+  const body = {
+    mood: mood.value, genre: genre.value, scene: scene.value,
+    tempo: tempo.value, instrument: instrument.value, energy: energy.value,
+    temperature: parseFloat(temperature.value),
+    top_p: parseFloat(top_p.value),
+    duration_sec: parseFloat(duration.value),
+  };
+
+  try {
+    const res = await fetch("/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status + " — " + (await res.text()).slice(0, 200));
+    const d = await res.json();
+
+    out.innerHTML = `
+      <div class="prompt">${d.prompt_text}</div>
+      <div class="stats">
+        <div class="stat"><div class="k">Số nốt</div><div class="v">${d.num_notes}</div></div>
+        <div class="stat"><div class="k">Độ dài</div><div class="v">${d.duration}s</div></div>
+      </div>
+      ${d.wav_available
+        ? `<audio controls src="${d.wav_url}"></audio>`
+        : `<div class="note">Không render được WAV (thiếu FluidSynth/SoundFont trên máy chủ) — vẫn tải được file MIDI bên dưới.</div>`}
+      <canvas id="roll"></canvas>
+      <div class="links">
+        <a href="${d.midi_url}" download>⬇ Tải MIDI</a>
+        ${d.wav_available ? `<a href="${d.wav_url}" download>⬇ Tải WAV</a>` : ""}
+      </div>`;
+
+    if (d.num_notes > 0) drawRoll(d.request_id);
+  } catch (e) {
+    out.innerHTML = `<div class="empty err">Lỗi: ${e.message}</div>`;
+  } finally {
+    go.disabled = false;
+  }
+});
+
+async function drawRoll(id) {
+  const { notes, duration } = await (await fetch("/notes/" + id)).json();
+  const cv = document.getElementById("roll");
+  if (!cv || !notes.length) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext("2d");
+  ctx.scale(dpr, dpr);
+
+  const pitches = notes.map(n => n.pitch);
+  const lo = Math.min(...pitches) - 2, hi = Math.max(...pitches) + 2;
+  const span = Math.max(hi - lo, 12);
+  const dur = Math.max(duration, 0.1);
+  const pad = 6;
+
+  // Faint guides on C notes to give the roll a musical reference.
+  ctx.strokeStyle = "rgba(255,255,255,0.05)";
+  for (let p = Math.ceil(lo / 12) * 12; p <= hi; p += 12) {
+    const y = pad + (1 - (p - lo) / span) * (H - 2 * pad);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  for (const n of notes) {
+    const x = (n.start / dur) * W;
+    const w = Math.max(((n.end - n.start) / dur) * W, 2);
+    const y = pad + (1 - (n.pitch - lo) / span) * (H - 2 * pad);
+    const h = Math.max((H - 2 * pad) / span - 1, 2);
+    const hue = 258 - (n.pitch - lo) / span * 90;   // low = violet, high = teal
+    ctx.fillStyle = `hsl(${hue} 75% ${45 + (n.velocity / 127) * 22}%)`;
+    ctx.fillRect(x, y - h / 2, w, h);
+  }
+}
+</script>
+</body>
+</html>
