@@ -69,6 +69,10 @@ def main():
                         help="Comma-separated epochs to always checkpoint (for comparison)")
     parser.add_argument("--no_early_stop", action="store_true",
                         help="Disable early stopping (useful for epoch 1/5/10 comparison)")
+    parser.add_argument("--amp", action="store_true",
+                        help="Enable AMP fp16 (off by default; unstable on some Vast GPUs)")
+    parser.add_argument("--no_cudnn", action="store_true",
+                        help="Disable cuDNN (slower; last resort if CUDA errors persist)")
     args = parser.parse_args()
 
     # Load config
@@ -134,9 +138,10 @@ def main():
         val_split=0.1,
         labels_file=lf,
         max_files=args.max_files,
-        num_workers=0,  # 0 is safer on Windows; increase for Linux
+        num_workers=0,  # 0 is safer on Windows / Vast CUDA debugging
         seed=seed,
-        pretokenize="auto",  # auto for small-medium datasets
+        # pretokize off: avoids large RAM spike + odd CUDA crashes on some Vast GPUs
+        pretokenize=False,
     )
 
     if len(dataset) == 0:
@@ -188,6 +193,8 @@ def main():
         save_epochs=save_epochs,
         device=device,
         pad_token_id=tokenizer.pad_id,
+        use_amp=args.amp,
+        disable_cudnn=args.no_cudnn,
     )
 
     # Resume if requested (deep feature)

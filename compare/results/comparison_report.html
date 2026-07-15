@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>So sánh Transformer vs Diffusion — Text-to-Music</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --line: #2c3848;
+      --text: #e8eef4;
+      --muted: #8b9aab;
+      --tf: #3d9cf0;
+      --df: #3ecf8e;
+      --warn: #e6a23c;
+      --radius: 10px;
+      --font: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1a3048 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #143528 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 20px 64px; }
+    h1 { font-size: 1.75rem; font-weight: 650; margin: 0 0 8px; letter-spacing: -0.02em; }
+    .sub { color: var(--muted); margin: 0 0 28px; font-size: 0.95rem; }
+    .note {
+      border: 1px solid var(--line);
+      background: #1c2430;
+      border-left: 3px solid var(--warn);
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      color: #d7dde6;
+      font-size: 0.9rem;
+      margin-bottom: 28px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr 1fr; } }
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+    }
+    .stat .label { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat .value { font-size: 1.35rem; font-weight: 650; margin-top: 4px; font-family: var(--mono); }
+    .stat .hint { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
+    .tf { color: var(--tf); }
+    .df { color: var(--df); }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 18px 18px 10px;
+      margin-bottom: 18px;
+    }
+    section h2 {
+      margin: 0 0 14px;
+      font-size: 1.05rem;
+      font-weight: 600;
+    }
+    .charts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+    @media (max-width: 800px) { .charts { grid-template-columns: 1fr; } }
+    .chart-box { position: relative; height: 260px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      margin-bottom: 8px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: right;
+      white-space: nowrap;
+    }
+    th:first-child, td:first-child,
+    th:nth-child(2), td:nth-child(2) { text-align: left; }
+    th { color: var(--muted); font-weight: 550; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
+    tr:hover td { background: rgba(255,255,255,0.03); }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .pill.tf { background: rgba(61,156,240,0.18); color: var(--tf); }
+    .pill.df { background: rgba(62,207,142,0.18); color: var(--df); }
+    .verdict {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 800px) { .verdict { grid-template-columns: 1fr; } }
+    .verdict article {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      background: #151c25;
+    }
+    .verdict h3 { margin: 0 0 8px; font-size: 0.95rem; }
+    .verdict ul { margin: 0; padding-left: 18px; color: #c5d0dc; font-size: 0.9rem; }
+    footer { color: var(--muted); font-size: 0.8rem; margin-top: 20px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Transformer vs Diffusion</h1>
+    <p class="sub">Text-to-Music (game BGM) · cùng dataset / split / 20 eval prompts · epoch 1 → 30</p>
+
+    <div class="note">
+      <strong>Lưu ý:</strong> Không so trực tiếp <em>val_loss</em> — Transformer dùng Cross-Entropy (~2.4), Diffusion dùng MSE (~0.003).
+      So sánh công bằng dựa trên <strong>quality metrics MIDI</strong>, thời gian train, VRAM và số tham số.
+    </div>
+
+    <div class="grid">
+      <div class="stat">
+        <div class="label">Params</div>
+        <div class="value"><span class="tf">7.72M</span> / <span class="df">4.43M</span></div>
+        <div class="hint">Transformer / Diffusion</div>
+      </div>
+      <div class="stat">
+        <div class="label">Train time (30 ep)</div>
+        <div class="value"><span class="tf">4.7h</span> / <span class="df">12.6h</span></div>
+        <div class="hint">Transformer nhanh hơn ~2.7×</div>
+      </div>
+      <div class="stat">
+        <div class="label">Peak VRAM (ổn định)</div>
+        <div class="value">~302 / ~304 MB</div>
+        <div class="hint">Cả hai trên RTX 3060</div>
+      </div>
+      <div class="stat">
+        <div class="label">Instrument match (ep30)</div>
+        <div class="value"><span class="tf">37%</span> / <span class="df">100%</span></div>
+        <div class="hint">Khớp program với prompt</div>
+      </div>
+    </div>
+
+    <section>
+      <h2>Training — loss &amp; thời gian</h2>
+      <div class="charts">
+        <div class="chart-box"><canvas id="chartLoss"></canvas></div>
+        <div class="chart-box"><canvas id="chartTime"></canvas></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Quality MIDI — mật độ &amp; silence</h2>
+      <div class="charts">
+        <div class="chart-box"><canvas id="chartDensity"></canvas></div>
+        <div class="chart-box"><canvas id="chartSilence"></canvas></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Quality MIDI — instrument match &amp; pitch-class JS vs ref</h2>
+      <div class="charts">
+        <div class="chart-box"><canvas id="chartInst"></canvas></div>
+        <div class="chart-box"><canvas id="chartJS"></canvas></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Bảng tổng hợp theo epoch</h2>
+      <div style="overflow-x:auto">
+        <table id="mainTable">
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Epoch</th>
+              <th>Train loss</th>
+              <th>Val loss</th>
+              <th>Epoch time (s)</th>
+              <th>Cumul. (h)</th>
+              <th>Note dens.</th>
+              <th>Silence</th>
+              <th>Polyphony</th>
+              <th>Inst. match</th>
+              <th>Pitch JS ↓</th>
+              <th>Infer (s/sample)</th>
+              <th>Empty</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Nhận xét nhanh (epoch 30)</h2>
+      <div class="verdict">
+        <article>
+          <h3 class="tf">Transformer (7.72M)</h3>
+          <ul>
+            <li>Train nhanh (~9.4 phút/epoch), tổng ~4.7 giờ.</li>
+            <li>MIDI thưa hơn (density ~5.6), có khoảng lặng (~34%).</li>
+            <li>Instrument match ~37% — còn lệch program so với prompt.</li>
+            <li>Polyphony thấp (~2) — gần kiểu monophonic/melodic hơn.</li>
+            <li>Phù hợp khi ưu tiên tốc độ train / sinh chuỗi token.</li>
+          </ul>
+        </article>
+        <article>
+          <h3 class="df">Diffusion (4.43M)</h3>
+          <ul>
+            <li>Train chậm hơn (~26 phút/epoch), tổng ~12.6 giờ.</li>
+            <li>MIDI dày (density ~86), gần như không silence (~0.9%).</li>
+            <li>Instrument match 100% — luôn khớp program prompt.</li>
+            <li>Polyphony cao (~43) — texture dày; có thể “ồn” hơn Transformer.</li>
+            <li>Infer nhanh hơn một chút (~2.4s vs ~4.1s / sample trên cùng setup eval).</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <footer>
+      Nguồn: <code>compare/results/comparison_table.csv</code> · GenAi-Text-To-Music · RTX 3060 (Vast)
+    </footer>
+  </div>
+
+  <script>
+    const rows = [
+      {method:"transformer",epoch:1, train:6.011537, val:null, et:558.216, cum:558.216, dens:1.567, sil:0.190, poly:6.918, inst:0.15, js:0.179, infer:3.904, empty:0.0},
+      {method:"diffusion",epoch:1, train:0.032231, val:0.00816, et:1445.641, cum:1445.641, dens:90.325, sil:0.009, poly:79.027, inst:1.0, js:0.074, infer:2.489, empty:0.0},
+      {method:"transformer",epoch:5, train:3.065261, val:2.896247, et:565.77, cum:2676.077, dens:6.147, sil:0.401, poly:2.835, inst:0.176, js:0.112, infer:5.142, empty:0.15},
+      {method:"diffusion",epoch:5, train:0.006056, val:0.004146, et:1406.771, cum:7071.581, dens:122.681, sil:0.009, poly:71.977, inst:1.0, js:0.075, infer:2.565, empty:0.0},
+      {method:"transformer",epoch:10, train:2.656427, val:2.579227, et:567.896, cum:5512.364, dens:2.788, sil:0.475, poly:2.723, inst:0.211, js:0.155, infer:4.288, empty:0.05},
+      {method:"diffusion",epoch:10, train:0.005114, val:0.003456, et:1407.218, cum:14111.641, dens:124.017, sil:0.010, poly:61.228, inst:1.0, js:0.080, infer:2.643, empty:0.0},
+      {method:"transformer",epoch:20, train:2.440702, val:2.417326, et:565.189, cum:11181.212, dens:3.665, sil:0.371, poly:1.870, inst:0.278, js:0.181, infer:4.096, empty:0.1},
+      {method:"diffusion",epoch:20, train:0.004443, val:0.003063, et:1574.93, cum:29479.044, dens:124.270, sil:0.011, poly:49.616, inst:1.0, js:0.080, infer:2.491, empty:0.0},
+      {method:"transformer",epoch:30, train:2.392251, val:2.389257, et:566.589, cum:16863.191, dens:5.559, sil:0.337, poly:2.007, inst:0.368, js:0.149, infer:4.078, empty:0.05},
+      {method:"diffusion",epoch:30, train:0.004077, val:0.002892, et:1578.293, cum:45236.041, dens:86.280, sil:0.009, poly:42.600, inst:1.0, js:0.082, infer:2.353, empty:0.0},
+    ];
+
+    const epochs = [1,5,10,20,30];
+    const tf = epochs.map(e => rows.find(r => r.method==="transformer" && r.epoch===e));
+    const df = epochs.map(e => rows.find(r => r.method==="diffusion" && r.epoch===e));
+
+    const fmt = (x, d=3) => x == null || Number.isNaN(x) ? "—" : Number(x).toFixed(d);
+    const tbody = document.querySelector("#mainTable tbody");
+    rows.forEach(r => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><span class="pill ${r.method==="transformer"?"tf":"df"}">${r.method}</span></td>
+        <td>${r.epoch}</td>
+        <td>${fmt(r.train,4)}</td>
+        <td>${fmt(r.val,4)}</td>
+        <td>${fmt(r.et,1)}</td>
+        <td>${fmt(r.cum/3600,2)}</td>
+        <td>${fmt(r.dens,2)}</td>
+        <td>${fmt(r.sil*100,1)}%</td>
+        <td>${fmt(r.poly,2)}</td>
+        <td>${fmt(r.inst*100,1)}%</td>
+        <td>${fmt(r.js,3)}</td>
+        <td>${fmt(r.infer,2)}</td>
+        <td>${fmt(r.empty*100,0)}%</td>`;
+      tbody.appendChild(tr);
+    });
+
+    const common = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: "#c5d0dc" } },
+        title: { display: true, color: "#e8eef4", font: { size: 13, weight: "600" } }
+      },
+      scales: {
+        x: { ticks: { color: "#8b9aab" }, grid: { color: "rgba(44,56,72,0.6)" } },
+        y: { ticks: { color: "#8b9aab" }, grid: { color: "rgba(44,56,72,0.6)" } }
+      }
+    };
+    const ds = (label, data, color) => ({
+      label, data, borderColor: color, backgroundColor: color + "33",
+      tension: 0.25, pointRadius: 4, pointHoverRadius: 6, borderWidth: 2
+    });
+
+    new Chart(document.getElementById("chartLoss"), {
+      type: "line",
+      data: {
+        labels: epochs,
+        datasets: [
+          ds("Transformer train CE", tf.map(r => r.train), "#3d9cf0"),
+          ds("Diffusion train MSE (×100)", df.map(r => r.train * 100), "#3ecf8e"),
+        ]
+      },
+      options: { ...common, plugins: { ...common.plugins, title: { ...common.plugins.title, text: "Train loss (Diffusion ×100 để cùng trục)" } } }
+    });
+
+    new Chart(document.getElementById("chartTime"), {
+      type: "line",
+      data: {
+        labels: epochs,
+        datasets: [
+          ds("Transformer cumul. hours", tf.map(r => r.cum/3600), "#3d9cf0"),
+          ds("Diffusion cumul. hours", df.map(r => r.cum/3600), "#3ecf8e"),
+        ]
+      },
+      options: { ...common, plugins: { ...common.plugins, title: { ...common.plugins.title, text: "Cumulative training time (hours)" } } }
+    });
+
+    new Chart(document.getElementById("chartDensity"), {
+      type: "line",
+      data: {
+        labels: epochs,
+        datasets: [
+          ds("Transformer", tf.map(r => r.dens), "#3d9cf0"),
+          ds("Diffusion", df.map(r => r.dens), "#3ecf8e"),
+        ]
+      },
+      options: { ...common, plugins: { ...common.plugins, title: { ...common.plugins.title, text: "Note density (notes/sec)" } } }
+    });
+
+    new Chart(document.getElementById("chartSilence"), {
+      type: "line",
+      data: {
+        labels: epochs,
+        datasets: [
+          ds("Transformer", tf.map(r => r.sil*100), "#3d9cf0"),
+          ds("Diffusion", df.map(r => r.sil*100), "#3ecf8e"),
+        ]
+      },
+      options: { ...common, plugins: { ...common.plugins, title: { ...common.plugins.title, text: "Silence ratio (%)" } } }
+    });
+
+    new Chart(document.getElementById("chartInst"), {
+      type: "line",
+      data: {
+        labels: epochs,
+        datasets: [
+          ds("Transformer", tf.map(r => r.inst*100), "#3d9cf0"),
+          ds("Diffusion", df.map(r => r.inst*100), "#3ecf8e"),
+        ]
+      },
+      options: {
+        ...common,
+        plugins: { ...common.plugins, title: { ...common.plugins.title, text: "Instrument match (%)" } },
+        scales: { ...common.scales, y: { ...common.scales.y, min: 0, max: 105 } }
+      }
+    });
+
+    new Chart(document.getElementById("chartJS"), {
+      type: "line",
+      data: {
+        labels: epochs,
+        datasets: [
+          ds("Transformer", tf.map(r => r.js), "#3d9cf0"),
+          ds("Diffusion", df.map(r => r.js), "#3ecf8e"),
+        ]
+      },
+      options: { ...common, plugins: { ...common.plugins, title: { ...common.plugins.title, text: "Pitch-class JS vs reference (thấp hơn ≈ gần train hơn)" } } }
+    });
+  </script>
+</body>
+</html>

@@ -52,6 +52,8 @@ def main():
     parser.add_argument("--max_files", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--amp", action="store_true", help="Enable AMP fp16 (off by default; unstable on some Vast GPUs)")
+    parser.add_argument("--no_cudnn", action="store_true", help="Disable cuDNN (usually slower / less stable on this project)")
     args = parser.parse_args()
 
     base = os.path.dirname(os.path.abspath(__file__))
@@ -157,6 +159,8 @@ def main():
             "diffusion": diff_cfg,
             "prompt": prompt_cfg,
         },
+        use_amp=args.amp,
+        disable_cudnn=args.no_cudnn,
     )
     trainer.train()
     print("\n✅ Diffusion training complete.")

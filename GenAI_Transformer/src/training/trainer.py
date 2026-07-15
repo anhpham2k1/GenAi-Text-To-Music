@@ -120,12 +120,27 @@ class Trainer:
         device: str = "auto",
         # Tokenizer info
         pad_token_id: int = 0,
+        # Stability (Vast / consumer GPUs)
+        use_amp: bool = False,
+        disable_cudnn: bool = False,
     ):
         # Device
         if device == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
+
+        self.use_amp = bool(use_amp and self.device.type == "cuda")
+        if self.device.type == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            torch.backends.cudnn.benchmark = False
+            # Prefer math SDPA — flash/mem-efficient often hits illegal memory access on Vast 3060
+            torch.backends.cuda.enable_flash_sdp(False)
+            torch.backends.cuda.enable_mem_efficient_sdp(False)
+            torch.backends.cuda.enable_math_sdp(True)
+            if disable_cudnn:
+                torch.backends.cudnn.enabled = False
 
         self.model = model.to(self.device)
         self.train_loader = train_loader
@@ -227,16 +242,39 @@ class Trainer:
         self.global_step = 0
         self.start_epoch = 1
 
-        # AMP Scaler
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.device.type == "cuda")
+        # AMP off by default — fp16 autocast often triggers CUDA misaligned address on Vast
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
 
         # Resume support
         self.start_epoch = 1
 
-        print(f"[Trainer] Device: {self.device}")
+        print(f"[Trainer] Device: {self.device} amp={self.use_amp}")
         print(f"[Trainer] Total steps: {self.total_steps}, Warmup: {warmup_steps}")
         print(f"[Trainer] Effective batch size: {train_loader.batch_size * gradient_accumulation_steps}")
         print(f"[Trainer] CSV results_dir: {self.results_dir}")
+
+        self._good_state = None
+        self._snapshot_good_weights()
+
+    def _weights_finite(self) -> bool:
+        for p in self.model.parameters():
+            if not torch.isfinite(p).all():
+                return False
+        return True
+
+    def _snapshot_good_weights(self):
+        """CPU copy of weights to roll back after a bad optimizer step."""
+        self._good_state = {
+            k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()
+        }
+
+    def _restore_good_weights(self):
+        if self._good_state is None:
+            return
+        self.model.load_state_dict(
+            {k: v.to(self.device) for k, v in self._good_state.items()}
+        )
+        self.optimizer.zero_grad(set_to_none=True)
 
     def load_checkpoint(self, path: str, continue_epochs: bool = True):
         """Resume training from checkpoint with proper scheduler sync.
@@ -273,6 +311,7 @@ class Trainer:
             self.scaler.load_state_dict(checkpoint["scaler"])
 
         print(f"[Trainer] Resumed from {path} (global_step={self.global_step}, start_epoch={self.start_epoch}, best_val={self.best_val_loss:.4f})")
+        self._snapshot_good_weights()
 
     def train(self) -> Dict:
         """
@@ -388,6 +427,7 @@ class Trainer:
     def _train_epoch(self, epoch: int) -> float:
         """Train one epoch with proper gradient accumulation handling."""
         self.model.train()
+        self._current_epoch = epoch
         total_loss = 0.0
         num_batches = 0
         accumulated = 0
@@ -399,76 +439,143 @@ class Trainer:
 
         try:
             for step, batch in enumerate(pbar):
-                tokens = batch["tokens"].to(self.device)
-
-                # Fast structured conditioning
-                mood = batch["mood"].to(self.device)
-                genre = batch["genre"].to(self.device)
-                scene = batch["scene"].to(self.device)
-                tempo = batch["tempo"].to(self.device)
-                instrument = batch["instrument"].to(self.device)
-                energy = batch["energy"].to(self.device)
-
-                input_tokens = tokens[:, :-1]
-                target_tokens = tokens[:, 1:]
-
-                with torch.cuda.amp.autocast(enabled=self.device.type == "cuda"):
-                    logits, _ = self.model(
-                        input_tokens,
-                        mood=mood, genre=genre, scene=scene,
-                        tempo=tempo, instrument=instrument, energy=energy
+                try:
+                    train_loss_piece = self._train_step(
+                        batch, step, pbar, accumulated
                     )
-                    loss = self.loss_fn(
-                        logits.reshape(-1, logits.size(-1)),
-                        target_tokens.reshape(-1),
-                    )
-                    loss = loss / self.gradient_accumulation_steps
-
-                self.scaler.scale(loss).backward()
-
-                total_loss += loss.item() * self.gradient_accumulation_steps
+                except RuntimeError as e:
+                    msg = str(e).lower()
+                    if "cuda" in msg:
+                        print(f"\n[FATAL] CUDA error at epoch {epoch} step {step}: {e}")
+                        self._save_checkpoint("latest.pt", epoch=max(1, epoch - 1))
+                        print("[FATAL] Saved checkpoints/latest.pt — Restart instance, then run train_watchdog.sh")
+                        import sys
+                        sys.exit(75)
+                    raise
+                if train_loss_piece is None:
+                    continue
+                loss_val, accumulated = train_loss_piece
+                total_loss += loss_val
                 num_batches += 1
-                accumulated += 1
-
-                # Robustness: detect NaN
-                if torch.isnan(loss):
-                    print(f"[WARNING] NaN loss detected at step {step}. Skipping update.")
-
-                # Update progress bar
-                current_lr = self.scheduler.get_lr()
-                pbar.set_postfix({
-                    "loss": f"{loss.item() * self.gradient_accumulation_steps:.4f}",
-                    "lr": f"{current_lr:.2e}"
-                })
-
-                # Perform optimizer step when accumulation is complete
-                if accumulated % self.gradient_accumulation_steps == 0:
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.max_grad_norm
-                    )
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                    self.scheduler.step()
-                    self.optimizer.zero_grad()
-                    self.global_step += 1
-                    accumulated = 0
         finally:
             pbar.close()
 
         # Handle remaining gradients if last accumulation was incomplete
         if accumulated > 0:
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.max_grad_norm
-            )
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            self.scheduler.step()
-            self.optimizer.zero_grad()
-            self.global_step += 1
+            try:
+                if self.use_amp:
+                    self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.max_grad_norm
+                )
+                if self.use_amp:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    self.optimizer.step()
+                if self._weights_finite():
+                    self._snapshot_good_weights()
+                else:
+                    self._restore_good_weights()
+                self.scheduler.step()
+                self.optimizer.zero_grad(set_to_none=True)
+                self.global_step += 1
+            except RuntimeError as e:
+                if "cuda" in str(e).lower():
+                    self._save_checkpoint("latest.pt", epoch=max(1, epoch - 1))
+                    import sys
+                    sys.exit(75)
+                raise
 
         return total_loss / max(1, num_batches)
+
+    def _train_step(self, batch, step, pbar, accumulated):
+        """One micro-batch. Returns (loss_value, new_accumulated) or None if skipped."""
+        tokens = batch["tokens"].to(self.device)
+
+        mood = batch["mood"].to(self.device)
+        genre = batch["genre"].to(self.device)
+        scene = batch["scene"].to(self.device)
+        tempo = batch["tempo"].to(self.device)
+        instrument = batch["instrument"].to(self.device)
+        energy = batch["energy"].to(self.device)
+
+        input_tokens = tokens[:, :-1]
+        target_tokens = tokens[:, 1:]
+
+        n_real = int((target_tokens != self.pad_token_id).sum().detach().cpu())
+        if n_real < 8:
+            return None
+
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            logits, _ = self.model(
+                input_tokens,
+                mood=mood, genre=genre, scene=scene,
+                tempo=tempo, instrument=instrument, energy=energy
+            )
+            logits_sum = logits.detach().float().sum()
+            if not torch.isfinite(logits_sum).item():
+                print(f"[WARNING] Non-finite logits at step {step}. Restoring last good weights.")
+                self._restore_good_weights()
+                self.optimizer.zero_grad(set_to_none=True)
+                return None
+            loss = self.loss_fn(
+                logits.reshape(-1, logits.size(-1)),
+                target_tokens.reshape(-1),
+            )
+            loss = loss / self.gradient_accumulation_steps
+
+        loss_cpu = float(loss.detach().cpu())
+        if not math.isfinite(loss_cpu):
+            print(f"[WARNING] Non-finite loss at step {step}. Restoring last good weights.")
+            self._restore_good_weights()
+            self.optimizer.zero_grad(set_to_none=True)
+            return None
+
+        if self.use_amp:
+            self.scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        accumulated += 1
+
+        current_lr = self.scheduler.get_lr()
+        pbar.set_postfix({
+            "loss": f"{loss_cpu * self.gradient_accumulation_steps:.4f}",
+            "lr": f"{current_lr:.2e}"
+        })
+
+        if accumulated % self.gradient_accumulation_steps == 0:
+            if self.use_amp:
+                self.scaler.unscale_(self.optimizer)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.max_grad_norm
+            )
+            if not torch.isfinite(grad_norm):
+                print(f"[WARNING] Non-finite grads at step {step}. Skip optimizer step.")
+                self.optimizer.zero_grad(set_to_none=True)
+                return (loss_cpu * self.gradient_accumulation_steps, 0)
+            if self.use_amp:
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                self.optimizer.step()
+            if not self._weights_finite():
+                print(f"[WARNING] NaN weights after step {step}. Restoring snapshot.")
+                self._restore_good_weights()
+            else:
+                self._snapshot_good_weights()
+            self.scheduler.step()
+            self.optimizer.zero_grad(set_to_none=True)
+            self.global_step += 1
+            accumulated = 0
+            # Mid-epoch safety checkpoint for watchdog resume
+            if self.global_step % 200 == 0:
+                # last fully finished epoch for resume (redo current epoch after crash)
+                done = max(1, getattr(self, "_current_epoch", 1) - 1)
+                self._save_checkpoint("latest.pt", epoch=done)
+
+        return (loss_cpu * self.gradient_accumulation_steps, accumulated)
 
     @torch.no_grad()
     def _evaluate(self) -> float:
@@ -491,7 +598,7 @@ class Trainer:
             input_tokens = tokens[:, :-1]
             target_tokens = tokens[:, 1:]
 
-            with torch.cuda.amp.autocast(enabled=self.device.type == "cuda"):
+            with torch.cuda.amp.autocast(enabled=self.use_amp):
                 logits, _ = self.model(
                     input_tokens,
                     mood=mood, genre=genre, scene=scene,
@@ -502,7 +609,7 @@ class Trainer:
                     target_tokens.reshape(-1),
                 )
 
-            total_loss += loss.item()
+            total_loss += float(loss.detach().cpu())
             num_batches += 1
 
         return total_loss / max(1, num_batches)

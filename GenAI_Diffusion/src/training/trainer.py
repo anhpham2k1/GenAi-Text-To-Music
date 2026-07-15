@@ -47,11 +47,25 @@ class DiffusionTrainer:
         ema_decay: float = 0.999,
         use_ema: bool = True,
         model_config: Optional[dict] = None,
+        use_amp: bool = False,
+        disable_cudnn: bool = False,
     ):
         if device == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
+
+        # Vast workaround: AMP fp16 often causes misaligned address /
+        # CUDNN_STATUS_EXECUTION_FAILED — keep fp32 by default.
+        self.use_amp = bool(use_amp and self.device.type == "cuda")
+        if self.device.type == "cuda":
+            # More stable on rented GPUs / mixed CUDA stacks
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            if disable_cudnn:
+                torch.backends.cudnn.enabled = False
+                print("[DiffusionTrainer] cuDNN disabled (stability workaround)")
 
         self.diffusion = diffusion.to(self.device)
         self.prompt_encoder = prompt_encoder.to(self.device)
@@ -74,7 +88,7 @@ class DiffusionTrainer:
 
         params = list(self.diffusion.parameters()) + list(self.prompt_encoder.parameters())
         self.optimizer = torch.optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.device.type == "cuda")
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
         self.timer = EpochTimer()
         self.best_val = float("inf")
         self.global_step = 0
@@ -117,7 +131,7 @@ class DiffusionTrainer:
                 "peak_vram_mb", "global_step", "device",
             ],
         )
-        print(f"[DiffusionTrainer] device={self.device} ema={use_ema}")
+        print(f"[DiffusionTrainer] device={self.device} ema={use_ema} amp={self.use_amp}")
 
     def _encode_cond(self, batch) -> torch.Tensor:
         return self.prompt_encoder(
@@ -129,63 +143,57 @@ class DiffusionTrainer:
             batch["energy"].to(self.device),
         )
 
+    def _optimizer_step(self):
+        params = list(self.diffusion.parameters()) + list(self.prompt_encoder.parameters())
+        if self.use_amp:
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
+            self.optimizer.step()
+        self.optimizer.zero_grad(set_to_none=True)
+        self.global_step += 1
+        if self.ema is not None:
+            self.ema_modules = nn.ModuleDict({
+                "unet": self.diffusion.model,
+                "prompt": self.prompt_encoder,
+            })
+            self.ema.update(self.ema_modules)
+
     def _train_epoch(self, epoch: int) -> float:
         self.diffusion.train()
         self.prompt_encoder.train()
         total = 0.0
         n = 0
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         pbar = tqdm(self.train_loader, desc=f"Diff Epoch {epoch}", leave=False)
         acc = 0
         for batch in pbar:
-            x0 = batch["pianoroll"].to(self.device)
-            cond = self._encode_cond(batch)
+            x0 = batch["pianoroll"].to(self.device, non_blocking=False).contiguous().float()
+            cond = self._encode_cond(batch).contiguous().float()
             B = x0.size(0)
             t = torch.randint(0, self.diffusion.timesteps, (B,), device=self.device).long()
 
-            with torch.cuda.amp.autocast(enabled=self.device.type == "cuda"):
+            with torch.cuda.amp.autocast(enabled=self.use_amp):
                 loss = self.diffusion.p_losses(x0, t, cond) / self.gradient_accumulation_steps
 
-            self.scaler.scale(loss).backward()
+            if self.use_amp:
+                self.scaler.scale(loss).backward()
+            else:
+                loss.backward()
             total += loss.item() * self.gradient_accumulation_steps
             n += 1
             acc += 1
             pbar.set_postfix(loss=f"{loss.item() * self.gradient_accumulation_steps:.4f}")
 
             if acc % self.gradient_accumulation_steps == 0:
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(
-                    list(self.diffusion.parameters()) + list(self.prompt_encoder.parameters()),
-                    self.max_grad_norm,
-                )
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-                self.optimizer.zero_grad()
-                self.global_step += 1
+                self._optimizer_step()
                 acc = 0
-                if self.ema is not None:
-                    self.ema_modules = nn.ModuleDict({
-                        "unet": self.diffusion.model,
-                        "prompt": self.prompt_encoder,
-                    })
-                    self.ema.update(self.ema_modules)
         pbar.close()
         if acc > 0:
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(
-                list(self.diffusion.parameters()) + list(self.prompt_encoder.parameters()),
-                self.max_grad_norm,
-            )
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            self.optimizer.zero_grad()
-            self.global_step += 1
-            if self.ema is not None:
-                self.ema_modules = nn.ModuleDict({
-                    "unet": self.diffusion.model,
-                    "prompt": self.prompt_encoder,
-                })
-                self.ema.update(self.ema_modules)
+            self._optimizer_step()
         return total / max(1, n)
 
     @torch.no_grad()
@@ -205,7 +213,9 @@ class DiffusionTrainer:
                 cond = self._encode_cond(batch)
                 B = x0.size(0)
                 t = torch.randint(0, self.diffusion.timesteps, (B,), device=self.device).long()
-                with torch.cuda.amp.autocast(enabled=self.device.type == "cuda"):
+                x0 = x0.contiguous().float()
+                cond = cond.contiguous().float()
+                with torch.cuda.amp.autocast(enabled=self.use_amp):
                     # no cond drop at eval
                     was_training = self.diffusion.training
                     self.diffusion.train(False)

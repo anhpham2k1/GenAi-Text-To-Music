@@ -115,7 +115,33 @@ class MidiDataset(Dataset):
         if max_files is not None:
             midi_files = midi_files[:max_files]
 
+        # Drop paths listed in cache of known-bad MIDI (built during training)
+        midi_files = self._exclude_cached_bad(midi_files)
         return midi_files
+
+    def _exclude_cached_bad(self, midi_files: List[str]) -> List[str]:
+        if not midi_files:
+            return midi_files
+        root = os.path.dirname(midi_files[0])
+        cache_path = os.path.join(root, ".bad_midi_cache.txt")
+        if not os.path.exists(cache_path):
+            return midi_files
+        with open(cache_path, "r", encoding="utf-8") as f:
+            bad = {line.strip() for line in f if line.strip()}
+        if not bad:
+            return midi_files
+        kept = [p for p in midi_files if p not in bad]
+        print(f"[MidiDataset] Excluded {len(midi_files) - len(kept)} known-bad MIDI from cache")
+        return kept
+
+    def _mark_bad_midi(self, path: str):
+        root = os.path.dirname(path)
+        cache_path = os.path.join(root, ".bad_midi_cache.txt")
+        try:
+            with open(cache_path, "a", encoding="utf-8") as f:
+                f.write(path + "\n")
+        except Exception:
+            pass
 
     def __len__(self) -> int:
         return len(self.midi_files)
@@ -143,7 +169,14 @@ class MidiDataset(Dataset):
                 token_ids = self.tokenizer.encode(midi_path, self.max_seq_len)
             except Exception as e:
                 # Fallback: return padded empty sequence
-                print(f"[WARNING] Failed to tokenize {midi_path}: {e}")
+                if not hasattr(self, "_tok_warn_count"):
+                    self._tok_warn_count = 0
+                self._tok_warn_count += 1
+                if self._tok_warn_count <= 5:
+                    print(f"[WARNING] Failed to tokenize {os.path.basename(midi_path)}: {e}")
+                elif self._tok_warn_count == 6:
+                    print("[WARNING] Further tokenize failures suppressed...")
+                self._mark_bad_midi(midi_path)
                 token_ids = [self.tokenizer.bos_id, self.tokenizer.eos_id]
                 token_ids += [self.tokenizer.pad_id] * (self.max_seq_len - len(token_ids))
                 token_ids = token_ids[: self.max_seq_len]
