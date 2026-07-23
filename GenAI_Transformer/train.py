@@ -97,10 +97,17 @@ def main():
 
     set_seed(seed)
 
+    captions_file = paths_cfg.get("captions_file", "../data/labels/captions.json")
+    captions_file = _resolve(captions_file)
+    if not os.path.exists(captions_file):
+        captions_file = None
+
     print("=" * 60)
-    print("  TEXT-TO-MUSIC: Training")
+    print("  TEXT-TO-MUSIC: Training (English text + MiniLM)")
     print("=" * 60)
     print(f"  Data: {data_dir}")
+    print(f"  Labels: {labels_file}")
+    print(f"  Captions: {captions_file or '(build from labels on the fly)'}")
     print(f"  Epochs: {num_epochs}")
     print(f"  Batch Size: {batch_size}")
     print(f"  LR: {lr}")
@@ -137,6 +144,7 @@ def main():
         batch_size=batch_size,
         val_split=0.1,
         labels_file=lf,
+        captions_file=captions_file,
         max_files=args.max_files,
         num_workers=0,  # 0 is safer on Windows / Vast CUDA debugging
         seed=seed,

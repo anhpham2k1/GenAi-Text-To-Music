@@ -1,0 +1,290 @@
+\chapter{Triển khai hệ thống}
+\label{chap:implementation}
+
+Nếu Chương~\ref{chap:theory} trả lời câu hỏi \textit{vì sao hai họ tạo sinh khác nhau về bản chất}, chương này trả lời câu hỏi cụ thể hơn: \textit{trong đồ án, chúng được hiện thực hóa trong mã nguồn như thế nào}. Ba điểm cần làm rõ là những gì đã được xây dựng, vì sao thiết kế theo hướng đó, và hệ quả nào sẽ hiện ra khi đọc số liệu ở Chương~\ref{chap:experiments}. Phần trình bày bám cấu trúc kho mã nguồn: \texttt{GenAI\_Transformer/} và \texttt{GenAI\_Diffusion/} cho hai nhánh mô hình, \texttt{data/} cho kho dùng chung, \texttt{compare/} cho đánh giá.
+
+%------------------------------------------------------------------------------
+\section{Tổng quan kiến trúc hệ thống}
+\label{sec:ch3-overview}
+
+Hệ thống được tổ chức theo ba lớp có trách nhiệm tách bạch. Lớp dưới cùng lo dữ liệu và điều kiện: MIDI đã lọc, nhãn sáu thuộc tính, chú thích tiếng Anh (caption), tệp phân chia huấn luyện/kiểm định cố định, cùng lớp mã nguồn mã hóa text \texttt{compare/text\_conditioner.py}. Lớp giữa là hai quy trình huấn luyện--sinh mẫu độc lập; chúng nhận $c$ theo cùng pipeline câu English$\rightarrow$vector và cùng ghi ra tệp MIDI, nhưng khác hoàn toàn ở biểu diễn trung gian, thuật toán sinh, và bộ trọng số đã học (projection + mạng nhạc). Lớp trên cùng đóng vai trò mô-đun đối chiếu: sinh theo 20 câu trong \texttt{eval\_prompts.json}, tính chỉ số trên MIDI (kèm meta thuộc tính), và ghi kết quả vào CSV dưới \texttt{compare/results/}.
+
+Luồng xử lý có thể hình dung tuần tự. Nhãn cấu trúc (hoặc câu người dùng) được chuyển thành một câu tiếng Anh; \texttt{TextPromptEncoder} (MiniLM đóng băng + projection) cho ra $c$. Nhánh Transformer đưa $c$ vào cross-attention trong decoder trên chuỗi REMI; nhánh Diffusion đưa $c$ vào UNet bằng FiLM, và khi lấy mẫu có thể áp CFG. Cả hai kết thúc bằng tệp \texttt{.mid}. Mô-đun \texttt{compare} đọc MIDI kèm siêu dữ liệu prompt để tính chỉ số. Cách bố trí này chính là hiện thực của đặc tả đầu vào--đầu ra đã nêu ở Chương~\ref{chap:intro}: khác kiến trúc bên trong, nhưng cùng đặc tả text và đầu ra MIDI bên ngoài.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{system_overview_text}
+    \caption{Kiến trúc tổng thể: cùng pipeline text$\rightarrow c$ (MiniLM đóng băng + projection),
+    hai generator độc lập, đầu ra MIDI và so sánh bằng metric trên \texttt{compare/}.}
+    \label{fig:ch3-system-arch}
+\end{figure}
+
+%------------------------------------------------------------------------------
+\section{Chuẩn hóa đầu vào --- từ nhãn cấu trúc đến câu text}
+\label{sec:ch3-prompt}
+
+Hai nhánh chỉ so sánh được khi chúng nhận điều kiện theo cùng một quy ước. Đồ án tách rõ \textbf{lược đồ nhãn} (phía dữ liệu/đánh giá) và \textbf{biểu diễn điều kiện} (phía mô hình).
+
+\subsection{Lược đồ sáu thuộc tính (tầng nhãn)}
+
+Sáu thuộc tính và số lớp tham chiếu trong cấu hình YAML / tài liệu dữ liệu được tóm trong bảng~\ref{tab:ch3-prompt-schema}. Chúng xuất hiện trong \texttt{data/labels/labels.json}, trong meta của \texttt{eval\_prompts.json}, và trong logic chỉ số (ví dụ \texttt{instrument\_match}, \texttt{PROGRAM\_MAP} phía Diffusion).
+
+\begin{table}[htbp]
+\centering
+\caption{Lược đồ thuộc tính có cấu trúc (nhãn / meta)}
+\label{tab:ch3-prompt-schema}
+\small
+\begin{tabular}{lcc}
+\toprule
+Thuộc tính & Số lớp & Ví dụ nhãn \\
+\midrule
+mood & 10 & happy, sad, dark, epic, \ldots \\
+genre & 10 & fantasy, horror, rpg, \ldots \\
+scene & 10 & forest, dungeon, village, \ldots \\
+tempo & 5 & slow, moderate, fast, \ldots \\
+instrument & 8 & piano, strings, brass, guitar, \ldots \\
+energy & 5 & calm, medium, intense, \ldots \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Trong mã nguồn còn module \texttt{compare/prompt\_schema.py} (ánh xạ nhãn$\leftrightarrow$ID) mang tính di sản từ thiết kế nhúng 6 ID cũ; \textbf{đường huấn luyện--sinh chính} của Transformer/Diffusion hiện tại \textbf{không} đưa sáu ID qua \texttt{nn.Embedding}, mà đi qua câu text (các mục tiếp theo).
+
+\subsection{Sinh câu tiếng Anh từ nhãn (caption)}
+\label{sec:ch3-caption}
+
+Hàm \texttt{labels\_to\_english\_caption} trong \texttt{compare/caption.py} ghép sáu trường (đã chuẩn hóa chữ thường) thành một câu theo mẫu cố định, ví dụ:
+
+\begin{center}
+\textit{``happy fantasy village music, fast tempo, piano, medium energy''}.
+\end{center}
+
+Khi huấn luyện, mỗi mẫu MIDI ưu tiên caption có sẵn trong \texttt{captions.json} (nếu có và khác rỗng); nếu không, lấy nhãn từ \texttt{labels.json} rồi gọi \texttt{labels\_to\_english\_caption}. Khi đánh giá, \texttt{entry\_to\_prompt\_text} ưu tiên trường \texttt{text} (hoặc \texttt{prompt}) trong \texttt{eval\_prompts.json}; nếu thiếu thì ghép lại từ sáu thuộc tính. Bộ 20 câu eval được viết sẵn theo cùng khung nghĩa (mood--genre--scene--tempo--instrument--energy), nên phong cách gần với template huấn luyện, dù có thể khác chữ hoa/thường hoặc cách diễn đạt chi tiết so với chuỗi do hàm ghép sinh ra.
+
+Việc dùng template có hai hệ quả. Thứ nhất, miền ngôn ngữ thực tế \textbf{hẹp} hơn text-to-music thương mại: mô hình chủ yếu thấy biến thể của cùng khung câu. Thứ hai, CLI suy luận vẫn nhận chuỗi \texttt{--prompt} tùy ý; chất lượng bám prompt ngoài phân phối template phụ thuộc khả năng tổng quát của MiniLM và projection đã học --- đồ án \textbf{không} khẳng định hiểu mọi mô tả tiếng Anh tự do.
+
+\subsection{TextPromptEncoder: MiniLM đóng băng + projection}
+\label{sec:ch3-text-encoder}
+
+Lớp mã nguồn dùng chung nằm tại \texttt{compare/text\_conditioner.py}, được re-export bởi \texttt{prompt\_encoder.py} của cả hai nhánh dưới tên \texttt{TextPromptEncoder}. Luồng xử lý:
+
+\begin{enumerate}
+    \item Tokenizer và backbone \texttt{sentence-transformers/all-MiniLM-L6-v2} (thư viện HuggingFace \texttt{transformers}) mã hóa batch câu; lấy mean-pooling trên token có mask, rồi chuẩn hóa $\ell_2$, cho vector $384$ chiều.
+    \item Backbone được \textbf{đóng băng} (\texttt{requires\_grad=False}, luôn ở chế độ eval): không cập nhật trọng số ngôn ngữ khi huấn luyện nhạc.
+    \item Lớp chiếu học được: $\mathrm{Linear}(384\rightarrow d)\rightarrow\mathrm{GELU}\rightarrow\mathrm{LayerNorm}\rightarrow\mathrm{Linear}(d\rightarrow d)$ với $d=d_{\mathrm{model}}$ hoặc $d_{\mathrm{cond}}$ (thường $256$), cho ra vector điều kiện $c\in\mathbb{R}^{d}$.
+    \item Module còn khai báo tham số \texttt{null\_emb}; tuy nhiên trong triển khai Diffusion hiện tại, \textbf{CFG / cond-drop dùng vector không} ($\mathbf{0}$), gán trực tiếp trong \texttt{\_maybe\_drop\_cond} và \texttt{predict\_noise}, chứ không gọi \texttt{null\_condition()}.
+\end{enumerate}
+
+Checkpoint lưu projection (và phần mạng nhạc); backbone MiniLM được tải lại từ HuggingFace lúc khởi tạo. Hai nhánh import cùng lớp encoder nên \textbf{cùng kiến trúc và cùng cách mã hóa câu}; sau huấn luyện, trọng số projection (và UNet/Transformer) của mỗi nhánh là độc lập.
+
+\begin{table}[htbp]
+\centering
+\caption{Đối chiếu thiết kế điều kiện: phiên bản nhúng 6 ID (cũ) và text MiniLM (hiện tại)}
+\label{tab:ch3-cond-evolution}
+\small
+\begin{tabular}{p{3.2cm}p{5.0cm}p{5.2cm}}
+\toprule
+\textbf{Hạng mục} & \textbf{Nhúng 6 ID (cũ)} & \textbf{Text MiniLM (hiện tại)} \\
+\midrule
+Đầu vào model & Sáu chỉ số nguyên & Câu English \\
+Encoder & $6\times$ embedding + MLP & MiniLM freeze + projection \\
+Train caption & Không cần câu & Template / \texttt{captions.json} \\
+Suy luận & Chọn nhãn / ID & \texttt{--prompt "..."} hoặc ghép từ nhãn \\
+Đồng bộ hai nhánh & Cùng schema ID & Cùng pipeline text; projection riêng \\
+Hạn chế chính & Không nhận câu text & Template hẹp; MiniLM không fine-tune \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Thiết kế hiện tại đánh đổi như sau: giao diện gần text-to-music và tái sử dụng tri thức ngôn ngữ có sẵn của MiniLM; đổi lại, so sánh backbone tạo sinh vẫn kiểm soát được vì encoder text \textbf{cùng pipeline và đóng băng}, không tinh chỉnh một encoder ngôn ngữ khác nhau cho từng nhánh (projection thì học riêng theo từng bài toán CE hoặc MSE).
+
+%------------------------------------------------------------------------------
+\section{Dataset và tiền xử lý}
+\label{sec:ch3-data}
+
+\subsection{Kho dữ liệu dùng chung}
+
+Thư mục \texttt{data/processed} chứa khoảng \textbf{14\,232} tệp MIDI sau bước lọc và gộp nguồn. Nhãn nằm tại \texttt{data/labels/labels.json}. Theo tài liệu dữ liệu của đồ án, thành phần chính là ComMU (cỡ \textbf{11\,144} tệp có siêu dữ liệu có cấu trúc), kèm phần MidiCaps và MAESTRO đã được đưa vào processed. Việc tách huấn luyện/kiểm định không để mỗi mô hình tự lấy mẫu ngẫu nhiên lại, mà dùng tệp cố định \texttt{compare/split.json}: khoảng \textbf{12\,809} mẫu huấn luyện và \textbf{1\,423} mẫu kiểm định (xấp xỉ 10\% kiểm định). Cả hai bộ huấn luyện đọc cùng danh sách này, nhờ đó khác biệt quan sát sau này không thể quy cho việc một bên quan sát tập khác bên kia.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\textwidth]{fig_ch3_data_composition}
+    \caption{Thành phần kho MIDI đã xử lý ($\approx$14\,232 tệp) và phân chia cố định
+    huấn luyện/kiểm định trong \texttt{compare/split.json}.}
+    \label{fig:ch3-data-composition}
+\end{figure}
+
+\subsection{Nhánh Transformer: tokenizer REMI}
+
+Phía Transformer, \texttt{GenAI\_Transformer/src/data/tokenizer.py} mã hóa MIDI theo kiểu REMI-like. Chú thích trong mã ghi vocabulary khoảng \textbf{388} token, gồm nhóm đặc biệt (\texttt{<PAD>}, \texttt{<BOS>}, \texttt{<EOS>}, \texttt{<UNK>}), \texttt{NOTE\_ON}/\texttt{NOTE\_OFF} trên 88 pitch (21--108), 32 bin vận tốc, \texttt{TIME\_SHIFT} với bước 10\,ms (tối đa 1\,s mỗi token), tám bin tempo, và mười sáu nhóm instrument theo \texttt{program//8}.
+
+Khi mã hóa, các nốt từ mọi track (bỏ drum) được gom và sắp theo thời gian; mỗi lần đổi nhóm nhạc cụ, tokenizer chèn token \texttt{INST\_*}. Chiều ngược lại quan trọng không kém: lúc giải mã (\texttt{decode}), token \texttt{INST\_*} cập nhật program hiện hành, còn nếu chuỗi không có \texttt{INST\_*} thì mặc định piano (program 0). Hệ quả trực tiếp là nhạc cụ trong tệp sinh \textbf{phải do mô hình quyết định qua token}. Chỉ số khớp instrument về sau, nếu đọc đúng, đang đo hành vi học chứ không đo một bước gán nhãn sau cùng.
+
+Độ dài chuỗi bị chặn bởi \texttt{max\_seq\_len} (cấu hình có thể lên 2048; thực nghiệm so sánh thường dùng 1024 để cân VRAM và thông lượng, theo hướng dẫn huấn luyện của kho mã nguồn). Tokenizer còn giữ bộ nhớ đệm mã hóa giới hạn (mặc định 500 mục) nhằm giảm lặp đọc tệp khi duyệt nhiều epoch.
+
+\subsection{Nhánh Diffusion: piano-roll}
+
+Phía Diffusion, \texttt{GenAI\_Diffusion/src/data/pianoroll.py} biến MIDI thành lưới hai chiều: 88 pitch (21--108) nhân 256 frame tại 24\,Hz, tương đương khoảng $10{,}7$ giây. Vận tốc được chuẩn hóa, nén gamma $0{,}8$, rồi ánh xạ về $[-1,1]$. Khi huấn luyện, quy trình cắt ngẫu nhiên theo trục thời gian và dịch pitch trong khoảng $\pm 2$ bán cung. Điểm then chốt là nhiều track được gộp qua \texttt{get\_piano\_roll} thành \textbf{một kênh} duy nhất: giai điệu, hòa âm và bass, nếu có, chồng lên cùng mặt phẳng kích hoạt.
+
+Hệ quả dự kiến --- và sẽ được đối chiếu bằng số liệu ở chương sau --- là mô hình học một trường 2D chứ không học tách stem. Mật độ nốt sau khi ra MIDI phụ thuộc mạnh vào cách ngưỡng hóa roll, không chỉ vào việc MSE đã thấp hay chưa.
+
+% Chi tiết mã hóa piano-roll: xem Mục~\ref{sec:ch3-diff-decode} và
+% Hình~\ref{fig:ch2-pianoroll-limits} (hạn chế lưới một kênh).
+
+%------------------------------------------------------------------------------
+\section{Triển khai Music Transformer}
+\label{sec:ch3-transformer}
+
+\subsection{Kiến trúc}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{transformer}
+    \caption{Luồng huấn luyện Music Transformer: REMI tokens + CE; điều kiện text qua
+    MiniLM đóng băng + projection $\rightarrow$ cross-attention.}
+    \label{fig:ch3-transformer-train}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.48\textwidth]{decoder-block}
+    \caption{Một \texttt{DecoderBlock}: self-attention nhân quả (GQA+RoPE),
+    cross-attention với $c$ text, SwiGLU FFN (Pre-Norm / RMSNorm).}
+    \label{fig:ch3-decoder-block}
+\end{figure}
+
+Lớp \texttt{MusicTransformer} trong \texttt{src/model/transformer.py} ghép bốn khối chính. \texttt{TextPromptEncoder} (Mục~\ref{sec:ch3-text-encoder}) nhận batch câu English và trả tensor điều kiện hình $(B,1,d_{\mathrm{model}})$ cho cross-attention. Token REMI đi qua \texttt{TokenEmbedding}. Tiếp theo là $N=6$ \texttt{DecoderBlock}, mỗi block lần lượt self-attention nhân quả, cross-attention với điều kiện, rồi FFN kiểu SwiGLU, theo kiểu Pre-Norm với RMSNorm. Đầu ra là lớp tuyến tính lên vocabulary; trọng số được \textbf{chia sẻ} (\textit{weight tying}) với embedding token.
+
+Cấu hình mặc định trong \texttt{config/config.yaml} chọn $d_{\mathrm{model}}=256$, tám head, GQA với bốn KV head, $d_{\mathrm{ff}}=1024$, dropout $0{,}1$, và bật QK-Norm. Nhật ký so sánh chính ghi nhận khoảng \textbf{7{,}72\,M} tham số trainable (không tính backbone MiniLM đóng băng). Self-attention (\texttt{attention.py}) dùng RoPE, GQA, QK-Norm và phép nhân attention tường minh, một lựa chọn nhằm tránh một số lỗi SDPA trên driver GPU phổ thông. Cross-attention lấy $K,V$ từ điều kiện có độ dài đúng bằng một.
+
+\subsection{Conditioning}
+
+Mọi lớp decoder thực hiện cross-attention vào cùng một vector điều kiện toàn cục $c$ suy ra từ câu text (Mục~\ref{sec:ch3-text-encoder}). Cách làm này đơn giản và đồng bộ nguồn $c$ với nhánh Diffusion, nhưng cũng có hạn chế rõ: toàn bộ ngữ nghĩa câu bị nén vào \textbf{một} khe biểu diễn. Không có chuỗi token điều kiện tách mood / instrument / \ldots, nên mô hình không được nhắc tường minh theo từng thuộc tính tại mỗi vị trí thời gian.
+
+\subsection{Hàm mất mát và huấn luyện}
+
+Huấn luyện theo teacher forcing: tại mỗi bước, mô hình dự đoán $y_t$ từ $y_{<t}$ và điều kiện $c$ (câu caption đã encode). Hàm mất mát là \texttt{CrossEntropyLoss} với \texttt{ignore\_index} bằng token pad và \textbf{làm mượt nhãn} $0{,}1$. Bộ tối ưu AdamW dùng $\beta=(0{,}9,0{,}98)$ và weight decay $0{,}01$; gradient chỉ cập nhật mạng nhạc và projection text, không cập nhật MiniLM. Lịch learning rate gồm warmup chiếm khoảng $5\%$ tổng số bước, sau đó cosine decay. Gradient được tích lũy (thường bốn bước micro-batch), cắt chuẩn $\ell_2$ với ngưỡng $1{,}0$, và huấn luyện dưới AMP khi có CUDA. Bộ huấn luyện còn khôi phục trọng số nếu gặp logits, hàm mất mát hoặc gradient không hữu hạn --- cơ chế thực dụng khi chuỗi dài trên GPU phổ thông. Nhật ký được ghi vào \texttt{compare/results/transformer\_training.csv}; điểm kiểm tra tốt nhất chọn theo entropy chéo kiểm định, đồng thời lưu thêm các mốc epoch phục vụ so sánh dọc quá trình học. Độ bối rối trên tập kiểm định được tính $\mathrm{PPL}=\exp(\mathcal{L}_{\mathrm{val}})$, có kẹp số học trong mã nguồn khi hàm mất mát lớn.
+
+Một vòng batch diễn ra như sau. Lấy tokens và câu caption (từ nhãn/caption file); tách input $[:,:-1]$ và target $[:,1:]$; encode text $\rightarrow c$; bỏ batch nếu số token khác pad quá ít; lan truyền xuôi dưới AMP; entropy chéo trên logits phẳng; chia hàm mất mát cho số bước tích lũy; lan truyền ngược; đủ micro-step thì unscale (nếu AMP), cắt gradient, cập nhật bộ tối ưu và lịch learning rate. Các bước an toàn số học nhằm tránh một batch lỗi làm hỏng cả điểm kiểm tra.
+
+\subsection{Sinh mẫu}
+
+\texttt{MusicGenerator} (\texttt{inference/generator.py}) mã hóa câu English một lần thành $c$, rồi sinh token tự hồi quy kèm KV-cache cho đến \texttt{EOS} hoặc \texttt{max\_length}. Điểm vào CLI (\texttt{generate.py}) nhận \texttt{--prompt} dạng chuỗi; nếu chỉ có các cờ nhãn có cấu trúc thì ghép caption bằng \texttt{labels\_to\_english\_caption}. Hàm \texttt{combined\_sampling} (\texttt{sampling.py}) áp temperature mặc định $0{,}85$, top-$p$ mặc định $0{,}9$, còn top-$k$ tắt theo mặc định. Chuỗi ID cuối cùng qua \texttt{tokenizer.decode} thành đối tượng \texttt{PrettyMIDI} và được ghi ra đĩa.
+
+%------------------------------------------------------------------------------
+\section{Triển khai Piano-roll Diffusion}
+\label{sec:ch3-diffusion}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{train-diffusion}
+    \caption{Luồng huấn luyện Piano-roll Diffusion: MIDI$\rightarrow$roll $88\times 256$,
+    nhiễu theo $t$, UNet có FiLM từ $c$ text, mất mát MSE; cond-drop cho CFG và EMA.}
+    \label{fig:ch3-diffusion-train}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.42\textwidth]{unet}
+    \caption{Conditional UNet trên piano-roll: down/up ResBlock, mid self-attention,
+    điều chế time emb + cond $c$ kiểu FiLM, đầu ra bản đồ nhiễu $\epsilon$.}
+    \label{fig:ch3-unet}
+\end{figure}
+
+\subsection{Kiến trúc}
+
+Nhánh diffusion cũng bắt đầu từ \texttt{TextPromptEncoder} (cùng pipeline MiniLM + projection như nhánh Transformer, trọng số projection độc lập), nhưng đầu ra là vector $(B,d_{\mathrm{cond}})$ chứ không unsqueeze thành chuỗi. \texttt{ConditionalUNet} (\texttt{unet.py}) gồm stem convolution, các ResBlock down/up, và self-attention 2D ở mid-block. Mỗi ResBlock điều chế đặc trưng theo kiểu \textbf{FiLM}: scale và shift được suy ra từ biểu diễn nhúng thời gian và từ điều kiện $c$, rồi cộng lại trước khi chuẩn hóa. Lớp \texttt{GaussianDiffusion} (\texttt{diffusion.py}) quản lý lịch cosine với $T=1000$, các hàm \texttt{q\_sample}, \texttt{p\_losses}, lấy mẫu DDIM và CFG. Trên UNet và projection text còn có \textbf{EMA} với hệ số suy giảm $0{,}999$.
+
+Cấu hình chất lượng trong \texttt{config/config.yaml} đặt \texttt{base\_channels=64}, channel mults $[1,2,4]$, \texttt{cond\_dim=256}, \texttt{sample\_steps=80}, \texttt{guidance\_scale=3.5}, $\eta=0$. Tóm tắt mô hình của thực nghiệm so sánh chính ghi khoảng \textbf{4{,}43\,M} tham số. Các lần thử trước từng xuất hiện cấu hình khoảng $13{,}7$\,M; phần phân tích kết quả ở chương sau bám điểm kiểm tra và nhật ký của thực nghiệm đủ 30 epoch trên toàn bộ phân chia, không trộn với các thử nghiệm quy mô tham số khác.
+
+\subsection{Conditioning và CFG}
+
+Trong lúc huấn luyện, \texttt{\_maybe\_drop\_cond} gán $c\leftarrow\mathbf{0}$ với xác suất $0{,}1$ (cond-drop), buộc UNet học cả nhánh có điều kiện lẫn vô điều kiện trên không gian vector đã chiếu. Khi lấy mẫu, \texttt{predict\_noise} kết hợp hai dự đoán theo
+
+\[
+\tilde\epsilon
+=
+\epsilon_{\emptyset}
++
+s\,(\epsilon_{c}-\epsilon_{\emptyset}),
+\]
+
+với $s$ mặc định $3{,}5$ và $\epsilon_{\emptyset}$ ứng với điều kiện \textbf{vector không} $\mathbf{0}$ (không dùng \texttt{null\_emb} trong đường CFG hiện tại). FiLM đưa $c$ vào mọi ResBlock ở mức toàn cục; không có cross-attention giữa prompt và từng vị trí không gian trên roll.
+
+\subsection{Hàm mất mát và huấn luyện}
+
+\texttt{p\_losses} thêm nhiễu vào $x_0$, để UNet dự đoán $\epsilon$, rồi tối thiểu hóa \textbf{MSE}. Không có hạng tử thưa hóa, cũng không có hàm mất mát phụ cho instrument. Bộ huấn luyện (\texttt{training/trainer.py}) dùng AdamW với learning rate cấu hình $1{,}5\times 10^{-4}$; trong nhật ký thực nghiệm 30 epoch đầy đủ, learning rate được ghi nhận \textbf{không giảm dần}, giữ cố định $1{,}5\times 10^{-4}$. AMP, tích lũy gradient, cắt chuẩn và cập nhật EMA sau mỗi bước tối ưu được bật. Kiểm định đo MSE trung bình với trọng số EMA shadow và ghi \texttt{diffusion\_training.csv}.
+
+Lớp \texttt{EMA} (\texttt{src/model/ema.py}) giữ bản sao floating-point của tham số và cập nhật
+$\theta_{\mathrm{shadow}} \leftarrow \alpha\theta_{\mathrm{shadow}} + (1-\alpha)\theta$
+với $\alpha=0.999$. Khi đánh giá hoặc lấy mẫu, \texttt{apply\_shadow} ghi đè tạm trọng số mô hình rồi \texttt{restore}. Điểm kiểm tra \texttt{best\_model.pt} phía diffusion được lưu với tùy chọn dùng trọng số EMA, nhất quán với thực hành phổ biến nhằm ổn định mẫu.
+
+Một bước huấn luyện gồm: lấy piano-roll $x_0$ và câu caption, mã hóa $c$ bằng \texttt{TextPromptEncoder}, lấy mẫu $t$ đều trong $\{0,\ldots,T-1\}$, tính \texttt{p\_losses} (có thể drop $c$), lan truyền ngược/tích lũy, cắt gradient rồi AdamW (MiniLM đóng băng), cuối cùng cập nhật EMA. Kiểm định lặp lại MSE trên bộ nạp dữ liệu kiểm định với trọng số shadow.
+
+\subsection{Sinh mẫu và giải mã MIDI}
+\label{sec:ch3-diff-decode}
+
+\texttt{generate.py} nhận câu \texttt{--prompt}, encode thành $c$, rồi gọi \texttt{diffusion.sample} theo DDIM ($\eta=0$, số bước lấy từ config hoặc CLI). Sau khi có roll, quy trình không để ``nhạc cụ'' cho UNet tự quyết theo nghĩa program MIDI. Thay vào đó, \texttt{program} được lấy từ \texttt{PROGRAM\_MAP} theo nhãn \texttt{instrument} trong meta prompt (ví dụ piano ánh xạ 0, strings ánh xạ 48) --- tách biệt với việc $c$ text đã vào UNet qua FiLM. Hàm \texttt{pianoroll\_to\_midi} ánh xạ $[-1,1]$ về $[0,1]$, áp ngưỡng (mặc định $0{,}15$, có chỉnh theo phân vị của các kích hoạt dương), loại bỏ các đoạn kích hoạt ngắn, ép thời lượng tối thiểu, rồi ghi đúng \textbf{một} track \texttt{Instrument(program=...)}. Nếu gần như không còn nốt, giải mã hạ ngưỡng lần hai để tránh mẫu rỗng.
+
+Hệ quả bắt buộc phải mang sang chương thực nghiệm: trong \texttt{compare/midi\_metrics.py}, \texttt{instrument\_match} dựa trên program trội của tệp MIDI. Với Diffusion, program đến từ bảng ánh xạ nhãn instrument, nên chỉ số này \textbf{không phản ánh} việc UNet đã học âm sắc từ câu text hay chưa. Đây không phải lỗi chỉ số đơn thuần, mà là hệ quả thiết kế giải mã đã chọn.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{fig_ch3_diffusion_decode}
+    \caption{Giải mã piano-roll $\rightarrow$ MIDI: ngưỡng hóa và gán
+    \texttt{program} từ \texttt{PROGRAM\_MAP} theo nhãn instrument ---
+    \texttt{instrument\_match}${}=1$ không phản ánh học âm sắc của UNet.}
+    \label{fig:ch3-diff-decode}
+\end{figure}
+
+%------------------------------------------------------------------------------
+\section{So sánh thiết kế kỹ thuật}
+\label{sec:ch3-design-compare}
+
+Bảng~\ref{tab:ch3-design} tóm tắt các khác biệt triển khai then chốt. Đây là khung đọc cho Chương~\ref{chap:experiments}: hai hàm mất mát không cùng thang đo, và mọi so sánh chất lượng MIDI phải kèm hiểu biết về đường đi instrument cũng như giải mã.
+
+\begin{table}[htbp]
+\centering
+\caption{Đối chiếu thiết kế hai nhánh như đã triển khai}
+\label{tab:ch3-design}
+\small
+\begin{tabular}{p{2.8cm}p{5.5cm}p{5.5cm}}
+\toprule
+\textbf{Hạng mục} & \textbf{Transformer} & \textbf{Diffusion} \\
+\midrule
+Biểu diễn & Token REMI & Roll $1\times 88\times T$ \\
+Nguồn điều kiện & Câu English + MiniLM + proj (riêng) & Cùng pipeline; proj riêng \\
+Chèn $c$ vào net & Cross-attn, độ dài cond $=1$ & FiLM + CFG ($\mathbf{0}$) \\
+Hàm mất mát & CE + làm mượt nhãn $0{,}1$ & MSE nhiễu \\
+Lịch LR & Warmup + cosine & Cố định (thực nghiệm chính) \\
+Lấy mẫu & AR, $\tau$+top-$p$ & DDIM 80, $s{=}3.5$ \\
+Nhạc cụ & Token \texttt{INST\_*} & \texttt{PROGRAM\_MAP} lúc giải mã \\
+Số tham số (nhật ký) & $\approx 7{,}72$\,M & $\approx 4{,}43$\,M \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%------------------------------------------------------------------------------
+\section{Mô-đun đánh giá và so sánh}
+\label{sec:ch3-eval}
+
+Mô-đun \texttt{compare/} được thiết kế như lớp độc lập với hai bộ huấn luyện. Tệp \texttt{split.json} và \texttt{eval\_prompts.json} (20 mục, mỗi mục có trường \texttt{text} tiếng Anh kèm meta sáu thuộc tính) cố định đầu vào của vòng đánh giá. Mỗi phương pháp tại mỗi mốc epoch sinh MIDI vào \texttt{compare/outputs/} từ đúng câu \texttt{text}. \texttt{midi\_metrics.py} tính các đại lượng cấu trúc --- thời lượng, số nốt, mật độ, đa âm, tỉ lệ im lặng, tỉ lệ mẫu rỗng, thống kê pitch, histogram pitch-class và khoảng cách JS so với tham chiếu, \texttt{instrument\_match} (dựa meta \texttt{instrument}) --- cùng thời gian suy luận ghi nhận được. Các tệp tổng hợp như \texttt{quality\_summary.csv}, \texttt{comparison\_table.csv} và nhật ký huấn luyện từng nhánh cho phép tái lập bảng số của chương sau.
+
+Cách diễn giải chỉ số được gắn sẵn vào thiết kế báo cáo. Entropy chéo không dùng để xếp Diffusion. \texttt{instrument\_match}${}=1$ ở Diffusion không được diễn giải là bám instrument hoàn hảo theo nghĩa tạo sinh. Thời lượng mặc định của diffusion khoảng $10{,}7$ giây, trong khi Transformer theo EOS hoặc độ dài chuỗi, nên so mật độ tuyệt đối giữa hai nhánh cần kèm nhận thức về khác độ dài đoạn.
+
+%------------------------------------------------------------------------------
+\section{Môi trường triển khai}
+\label{sec:ch3-env}
+
+Thực nghiệm được ghi nhận trên Linux với GPU \textbf{NVIDIA GeForce RTX~3060} (VRAM tổng khoảng 12\,GB theo \texttt{model\_summary.csv}), Python 3.12 và PyTorch CUDA. Điểm vào huấn luyện và sinh là \texttt{train.py}, \texttt{generate.py}, cùng \texttt{generate\_eval.py} phía Transformer. Siêu tham số điều khiển qua YAML và CLI (epoch, batch, learning rate). Hạt giống ngẫu nhiên mặc định trong config là 42. Chi tiết vận hành nằm trong \texttt{docs/TRAINING\_GUIDE.md} của kho mã nguồn.
+
+%------------------------------------------------------------------------------
+\section{Hạn chế của phần triển khai}
+\label{sec:ch3-limits}
+
+Một số hạn chế không phải sự cố bất ngờ mà là hệ quả của các lựa chọn trên, và sẽ được đối chiếu trực tiếp với số liệu ở chương sau. Câu caption huấn luyện chủ yếu theo template hẹp; MiniLM đóng băng nên không thích ứng miền nhạc; $c$ vẫn chỉ một vector toàn cục cho cross-attention/FiLM. Nhánh Diffusion dùng roll một kênh, hàm mất mát MSE thuần, giải mã thiên về giữ nốt, và gán program cố định từ nhãn. Nhánh Transformer phụ thuộc việc sinh \texttt{INST\_*} và \texttt{EOS}, với cross-attention mang thiên lệch toàn cục. Quy trình đánh giá chính chưa có thử nghiệm nghe, FAD hay CLAP score. CSV lịch sử còn sót các lần chạy thử trên tập con nhỏ (kiểm định NaN); phân tích chính chỉ bám thực nghiệm đủ dữ liệu 30 epoch.
+
+%------------------------------------------------------------------------------
+\section*{Tóm tắt chương}
+\addcontentsline{toc}{section}{Tóm tắt chương}
+
+Chương này đã mô tả quy trình dùng chung, cầu nối nhãn$\rightarrow$câu English$\rightarrow$\texttt{TextPromptEncoder}, cách REMI và piano-roll được tạo ra, kiến trúc kèm điều kiện hóa, hàm mất mát, huấn luyện và suy luận của hai nhánh, vai trò của \texttt{compare/}, môi trường RTX~3060, và các hạn chế triển khai then chốt --- đặc biệt đường đi của instrument và sự khác bản chất giữa entropy chéo và MSE. Chương~\ref{chap:experiments} đặt các quyết định đó cạnh nhật ký huấn luyện và chỉ số MIDI để xem giả thuyết thiết kế đứng vững đến đâu.

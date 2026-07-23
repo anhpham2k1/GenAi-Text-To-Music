@@ -2,8 +2,11 @@
 
 Tài liệu train **hai project** trên **cùng dataset** `D:\Master\Ky3\data`.
 
-- **GenAI_Transformer**: Music Transformer (REMI tokens, ~7–8M params)  
-- **GenAI_Diffusion**: Conditional piano-roll diffusion (UNet + CFG)  
+- **GenAI_Transformer**: Music Transformer (REMI tokens + **English text → MiniLM**)  
+- **GenAI_Diffusion**: Conditional piano-roll diffusion (UNet + CFG + **same text encoder**)  
+
+**Conditioning:** free-text English prompt (not 6-ID embeddings).  
+Shared: `compare/text_conditioner.py`, captions from `data/labels/captions.json` (or build on the fly from labels).  
 
 ---
 
@@ -21,14 +24,16 @@ Dataset phải có:
 
 - `data/processed/` (~14k MIDI)
 - `data/labels/labels.json`
+- `data/labels/captions.json` (English — optional, auto from labels)
 - `compare/split.json` (train/val cố định)
-
-Tạo lại split (nếu cần):
 
 ```powershell
 cd D:\Master\Ky3
+python scripts/build_captions.py
 python -m compare.make_split --midi_dir data/processed
 ```
+
+> Checkpoint **6-ID cũ không load** được cho text pipeline — train lại từ đầu.
 
 ---
 
@@ -69,8 +74,7 @@ python train.py `
 
 ```powershell
 python generate.py `
-  --mood happy --genre fantasy --scene village `
-  --tempo fast --instrument piano --energy medium `
+  --prompt "Happy fantasy village music, fast tempo, piano, medium energy" `
   --duration_sec 30 `
   --checkpoint checkpoints/best_model.pt
 ```

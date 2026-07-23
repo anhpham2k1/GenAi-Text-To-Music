@@ -90,7 +90,11 @@ async def lifespan(app: FastAPI):
         )
         if loaded_vocab != tokenizer.vocab_size:
             print(f"[API WARNING] Vocab mismatch: checkpoint={loaded_vocab} vs tokenizer={tokenizer.vocab_size}")
-        model.load_state_dict(checkpoint["model_state_dict"])
+        missing, unexpected = model.load_state_dict(
+            checkpoint["model_state_dict"], strict=False
+        )
+        if missing:
+            print(f"[API] missing keys (ok if MiniLM backbone): {len(missing)}")
     else:
         print(f"[API] No checkpoint found at {checkpoint_path}")
         print("[API] Using untrained model (random weights) for demo")
@@ -158,7 +162,7 @@ app.add_middleware(
 async def root():
     """API root (frontend removed — use /docs)."""
     return JSONResponse({
-        "message": "Text-to-Music API (structured prompt only)",
+        "message": "Text-to-Music API (English free-text prompt + MiniLM)",
         "docs": "/docs",
         "health": "/health",
         "generate": "POST /generate",
@@ -167,28 +171,28 @@ async def root():
 
 @app.post("/generate", response_model=MusicResponse)
 async def generate_music(request: MusicRequest):
-    """Generate music from structured attributes only (same input as Diffusion)."""
+    """Generate music from an English text prompt."""
     if generator is None:
         raise HTTPException(503, "Model not loaded")
 
-    # Shared schema with Diffusion (no BERT / free-text)
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    from compare.prompt_schema import format_prompt_display, labels_to_ids, normalize_structured
+    from compare.caption import labels_to_english_caption
 
     request_id = str(uuid.uuid4())[:8]
     output_dir = os.path.join("outputs", request_id)
     os.makedirs(output_dir, exist_ok=True)
 
-    labels = normalize_structured(
-        mood=request.mood,
-        genre=request.genre,
-        scene=request.scene,
-        tempo=request.tempo,
-        instrument=request.instrument,
-        energy=request.energy,
-    )
-    ids = labels_to_ids(labels)
-    prompt_display = format_prompt_display(labels)
+    if request.prompt and request.prompt.strip():
+        prompt_display = request.prompt.strip()
+    else:
+        prompt_display = labels_to_english_caption(
+            mood=request.mood,
+            genre=request.genre,
+            scene=request.scene,
+            tempo=request.tempo,
+            instrument=request.instrument,
+            energy=request.energy,
+        )
 
     # Duration → token budget (~12 tokens/sec REMI, clamp to model max_seq)
     max_seq = 2048
@@ -204,10 +208,10 @@ async def generate_music(request: MusicRequest):
     midi_path = os.path.join(output_dir, "background_music.mid")
     generator.generate_midi(
         output_path=midi_path,
+        prompt=prompt_display,
         max_length=max_length,
         temperature=request.temperature,
         top_p=request.top_p,
-        **ids,
     )
 
     # Render WAV

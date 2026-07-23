@@ -22,20 +22,17 @@ tokenizer:
   tempo_bins: 8
   num_instrument_groups: 16
 
-# --- Prompt ---
+# --- Prompt (English text → MiniLM freeze + projection) ---
 prompt:
+  text_model: "sentence-transformers/all-MiniLM-L6-v2"
+  max_text_length: 64
+  # legacy structured dims kept only for reference / caption templates
   num_moods: 10
   num_genres: 10
   num_scenes: 10
   num_tempos: 5
   num_instruments: 8
   num_energies: 5
-  mood_dim: 64
-  genre_dim: 64
-  scene_dim: 64
-  tempo_dim: 32
-  instrument_dim: 32
-  energy_dim: 32
 
 # --- Training ---
 training:
@@ -72,6 +69,7 @@ paths:
   raw_midi_dir: "../data/raw"
   processed_dir: "../data/processed"
   labels_dir: "../data/labels"
+  captions_file: "../data/labels/captions.json"
   checkpoints_dir: "checkpoints"
   outputs_dir: "outputs"
   logs_dir: "logs"

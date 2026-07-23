@@ -1,5 +1,9 @@
 # So sánh Transformer vs Diffusion (cùng dataset)
 
+> **Conditioning (cập nhật):** cả hai model dùng **English free-text** → MiniLM freeze + projection  
+> (`compare/text_conditioner.py`). Eval prompts: field `text` trong `eval_prompts.json`.  
+> Checkpoint 6-ID cũ **không** tương thích — cần train lại.
+
 ## Cấu trúc
 
 ```

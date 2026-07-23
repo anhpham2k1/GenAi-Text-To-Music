@@ -86,7 +86,12 @@ class DiffusionTrainer:
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(results_dir, exist_ok=True)
 
-        params = list(self.diffusion.parameters()) + list(self.prompt_encoder.parameters())
+        pe_params = (
+            list(self.prompt_encoder.trainable_parameters())
+            if hasattr(self.prompt_encoder, "trainable_parameters")
+            else [p for p in self.prompt_encoder.parameters() if p.requires_grad]
+        )
+        params = list(self.diffusion.parameters()) + pe_params
         self.optimizer = torch.optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
         self.timer = EpochTimer()
@@ -134,17 +139,17 @@ class DiffusionTrainer:
         print(f"[DiffusionTrainer] device={self.device} ema={use_ema} amp={self.use_amp}")
 
     def _encode_cond(self, batch) -> torch.Tensor:
-        return self.prompt_encoder(
-            batch["mood"].to(self.device),
-            batch["genre"].to(self.device),
-            batch["scene"].to(self.device),
-            batch["tempo"].to(self.device),
-            batch["instrument"].to(self.device),
-            batch["energy"].to(self.device),
-        )
+        """English prompt_text list → (B, cond_dim)."""
+        texts = batch["prompt_text"]
+        return self.prompt_encoder(texts=list(texts), as_sequence=False)
 
     def _optimizer_step(self):
-        params = list(self.diffusion.parameters()) + list(self.prompt_encoder.parameters())
+        pe_params = (
+            list(self.prompt_encoder.trainable_parameters())
+            if hasattr(self.prompt_encoder, "trainable_parameters")
+            else [p for p in self.prompt_encoder.parameters() if p.requires_grad]
+        )
+        params = list(self.diffusion.parameters()) + pe_params
         if self.use_amp:
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
@@ -237,14 +242,24 @@ class DiffusionTrainer:
             self.ema.apply_shadow(mods)
             applied = True
         try:
+            # Strip MiniLM backbone from prompt encoder ckpt (reload from HF)
+            if hasattr(self.prompt_encoder, "export_state_dict"):
+                pe_sd = self.prompt_encoder.export_state_dict()
+            else:
+                pe_sd = {
+                    k: v for k, v in self.prompt_encoder.state_dict().items()
+                    if not k.startswith("backbone.")
+                }
+            cfg = dict(self.model_config)
+            cfg["conditioning"] = "english_text_minilm"
             payload = {
                 "epoch": epoch,
                 "global_step": self.global_step,
                 "best_val_loss": self.best_val,
                 "diffusion_state_dict": self.diffusion.state_dict(),
-                "prompt_encoder_state_dict": self.prompt_encoder.state_dict(),
+                "prompt_encoder_state_dict": pe_sd,
                 "optimizer_state_dict": self.optimizer.state_dict(),
-                "config": self.model_config,
+                "config": cfg,
                 "ema": self.ema.state_dict() if self.ema is not None else None,
             }
             torch.save(payload, path)

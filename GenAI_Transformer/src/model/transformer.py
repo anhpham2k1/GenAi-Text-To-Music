@@ -1,25 +1,24 @@
 """
-Music Transformer — Conditional music generation (structured prompt only).
+Music Transformer — Conditional music generation from English text prompt.
 
-Same INPUT as Diffusion: mood, genre, scene, tempo, instrument, energy.
-Same OUTPUT: MIDI tokens → MIDI file.
-
-No BERT / free-text NLP encoder.
+INPUT: free-form English sentence → MiniLM (freeze) + projection → cond
+OUTPUT: MIDI tokens → MIDI file
 """
 
 from __future__ import annotations
 
+from typing import List, Optional, Sequence, Tuple
+
 import torch
 import torch.nn as nn
-from typing import Optional, Tuple, List
 
 from .embedding import TokenEmbedding
 from .layers import DecoderBlock, RMSNorm
-from .prompt_encoder import PromptEncoder
+from .prompt_encoder import TextPromptEncoder
 
 
 class MusicTransformer(nn.Module):
-    """Conditional Music Transformer (decoder-only + cross-attn on structured prompt)."""
+    """Conditional Music Transformer (decoder-only + cross-attn on text prompt)."""
 
     def __init__(
         self,
@@ -47,21 +46,16 @@ class MusicTransformer(nn.Module):
         self.weight_tying = weight_tying
 
         prompt_cfg = prompt_config or {}
+        text_model = prompt_cfg.get(
+            "text_model", "sentence-transformers/all-MiniLM-L6-v2"
+        )
+        max_text_len = int(prompt_cfg.get("max_text_length", 64))
 
-        self.structured_encoder = PromptEncoder(
+        self.text_encoder = TextPromptEncoder(
             d_model=d_model,
-            num_moods=prompt_cfg.get("num_moods", 10),
-            num_genres=prompt_cfg.get("num_genres", 10),
-            num_scenes=prompt_cfg.get("num_scenes", 10),
-            num_tempos=prompt_cfg.get("num_tempos", 5),
-            num_instruments=prompt_cfg.get("num_instruments", 8),
-            num_energies=prompt_cfg.get("num_energies", 5),
-            mood_dim=prompt_cfg.get("mood_dim", 64),
-            genre_dim=prompt_cfg.get("genre_dim", 64),
-            scene_dim=prompt_cfg.get("scene_dim", 64),
-            tempo_dim=prompt_cfg.get("tempo_dim", 32),
-            instrument_dim=prompt_cfg.get("instrument_dim", 32),
-            energy_dim=prompt_cfg.get("energy_dim", 32),
+            model_name=text_model,
+            max_length=max_text_len,
+            freeze_backbone=True,
         )
 
         self.token_embedding = TokenEmbedding(vocab_size, d_model)
@@ -81,78 +75,69 @@ class MusicTransformer(nn.Module):
                 for _ in range(num_layers)
             ]
         )
-
         self.final_norm = RMSNorm(d_model)
-        self.output_projection = nn.Linear(d_model, vocab_size)
-
+        self.output_projection = nn.Linear(d_model, vocab_size, bias=False)
         if weight_tying:
             self.output_projection.weight = self.token_embedding.embedding.weight
 
         self.dropout = nn.Dropout(dropout)
         self._init_weights()
-        n_params = sum(p.numel() for p in self.parameters())
+        n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        n_total = sum(p.numel() for p in self.parameters())
         print(
-            f"[MusicTransformer] Parameters: {n_params:,} ({n_params/1e6:.1f}M) "
-            f"[structured-prompt only, no BERT]"
+            f"[MusicTransformer] trainable={n_params:,} total={n_total:,} "
+            f"(English text prompt + MiniLM freeze)"
         )
 
     def _init_weights(self):
-        for p in self.parameters():
+        for name, p in self.named_parameters():
+            if "backbone" in name:
+                continue
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def encode_structured_prompt(
+    def encode_text(
         self,
-        mood: torch.Tensor,
-        genre: torch.Tensor,
-        scene: torch.Tensor,
-        tempo: torch.Tensor,
-        instrument: torch.Tensor,
-        energy: torch.Tensor,
+        texts: Sequence[str],
+        as_sequence: bool = True,
     ) -> torch.Tensor:
-        return self.structured_encoder(mood, genre, scene, tempo, instrument, energy)
+        """Encode English prompts → (B, 1, d_model) for cross-attn."""
+        return self.text_encoder(texts=list(texts), as_sequence=as_sequence)
 
     def _get_conditioning(
         self,
-        mood: torch.Tensor = None,
-        genre: torch.Tensor = None,
-        scene: torch.Tensor = None,
-        tempo: torch.Tensor = None,
-        instrument: torch.Tensor = None,
-        energy: torch.Tensor = None,
-        cond: torch.Tensor = None,
+        prompt_text: Optional[Sequence[str]] = None,
+        cond: Optional[torch.Tensor] = None,
+        **_ignored,
     ) -> torch.Tensor:
         if cond is not None:
+            if cond.dim() == 2:
+                return cond.unsqueeze(1)
             return cond
-        if mood is not None:
-            return self.structured_encoder(mood, genre, scene, tempo, instrument, energy)
+        if prompt_text is not None:
+            return self.encode_text(prompt_text, as_sequence=True)
         raise ValueError(
-            "Structured conditioning required: pass mood/genre/scene/tempo/instrument/energy "
-            "or a pre-encoded cond tensor. Free-text / BERT is not supported."
+            "Text conditioning required: pass prompt_text (list of English strings) "
+            "or a pre-encoded cond tensor (B, 1, d_model)."
         )
 
     def forward(
         self,
         tokens: torch.Tensor,
-        mood: torch.Tensor = None,
-        genre: torch.Tensor = None,
-        scene: torch.Tensor = None,
-        tempo: torch.Tensor = None,
-        instrument: torch.Tensor = None,
-        energy: torch.Tensor = None,
-        cond: torch.Tensor = None,
+        prompt_text: Optional[Sequence[str]] = None,
+        cond: Optional[torch.Tensor] = None,
         kv_caches: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
         **_ignored,
     ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Args:
             tokens: (B, T) MIDI token ids
-            mood..energy: (B,) structured prompt ids
-            cond: optional pre-encoded (B, 1, d_model)
+            prompt_text: list[str] length B — English captions
+            cond: optional pre-encoded (B, 1, d_model) or (B, d_model)
         Returns:
             logits (B, T, vocab), kv_caches
         """
-        cond = self._get_conditioning(mood, genre, scene, tempo, instrument, energy, cond)
+        cond = self._get_conditioning(prompt_text=prompt_text, cond=cond)
 
         x = self.token_embedding(tokens)
         x = self.dropout(x)
@@ -167,35 +152,22 @@ class MusicTransformer(nn.Module):
         logits = self.output_projection(x)
         return logits, new_kv_caches
 
+    def export_state_dict(self) -> dict:
+        from .prompt_encoder import strip_backbone_from_state_dict
+
+        return strip_backbone_from_state_dict(self.state_dict(), prefix="text_encoder.")
+
     def save(self, path: str):
         torch.save(
             {
-                "model_state_dict": self.state_dict(),
+                "model_state_dict": self.export_state_dict(),
                 "config": {
                     "vocab_size": self.vocab_size,
                     "d_model": self.d_model,
                     "max_seq_len": self.max_seq_len,
+                    "conditioning": "english_text_minilm",
                 },
             },
             path,
         )
         print(f"[MusicTransformer] Saved to {path}")
-
-    @classmethod
-    def load(cls, path: str, **override_kwargs) -> "MusicTransformer":
-        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-        config = checkpoint.get("config", {})
-        config.update(override_kwargs)
-        model = cls(**{k: v for k, v in config.items() if k in (
-            "vocab_size", "d_model", "max_seq_len"
-        ) or k in override_kwargs})
-        # Prefer full construction by caller; fallback minimal
-        if "vocab_size" in config:
-            model = cls(
-                vocab_size=config["vocab_size"],
-                d_model=config.get("d_model", 256),
-                max_seq_len=config.get("max_seq_len", 2048),
-                **{k: v for k, v in override_kwargs.items() if k not in ("vocab_size", "d_model", "max_seq_len")},
-            )
-        model.load_state_dict(checkpoint["model_state_dict"], strict=False)
-        return model

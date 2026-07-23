@@ -157,9 +157,10 @@ class Trainer:
         self.method_name = method_name
         self.save_epochs = set(save_epochs or [1, 5, 10])
 
-        # Optimizer
+        # Optimizer (skip frozen MiniLM backbone)
+        trainable = [p for p in model.parameters() if p.requires_grad]
         self.optimizer = torch.optim.AdamW(
-            model.parameters(),
+            trainable,
             lr=learning_rate,
             betas=betas,
             eps=eps,
@@ -289,8 +290,20 @@ class Trainer:
 
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
 
-        self.model.load_state_dict(checkpoint["model_state_dict"])
-        self.optimizer.load_state_dict(checkpoint.get("optimizer_state_dict", {}))
+        # Backbone (MiniLM) is reloaded from HF; ckpt only has proj + music weights
+        missing, unexpected = self.model.load_state_dict(
+            checkpoint["model_state_dict"], strict=False
+        )
+        if missing:
+            print(f"[Trainer] resume missing keys (ok if backbone): {len(missing)}")
+        if unexpected:
+            print(f"[Trainer] resume unexpected keys: {len(unexpected)}")
+        opt_sd = checkpoint.get("optimizer_state_dict")
+        if opt_sd:
+            try:
+                self.optimizer.load_state_dict(opt_sd)
+            except Exception as e:
+                print(f"[Trainer] optimizer state not loaded ({e}); continuing with fresh optimizer")
 
         self.global_step = checkpoint.get("global_step", 0)
         self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
@@ -492,13 +505,7 @@ class Trainer:
     def _train_step(self, batch, step, pbar, accumulated):
         """One micro-batch. Returns (loss_value, new_accumulated) or None if skipped."""
         tokens = batch["tokens"].to(self.device)
-
-        mood = batch["mood"].to(self.device)
-        genre = batch["genre"].to(self.device)
-        scene = batch["scene"].to(self.device)
-        tempo = batch["tempo"].to(self.device)
-        instrument = batch["instrument"].to(self.device)
-        energy = batch["energy"].to(self.device)
+        prompt_text = batch["prompt_text"]  # list[str] from default collate
 
         input_tokens = tokens[:, :-1]
         target_tokens = tokens[:, 1:]
@@ -510,8 +517,7 @@ class Trainer:
         with torch.cuda.amp.autocast(enabled=self.use_amp):
             logits, _ = self.model(
                 input_tokens,
-                mood=mood, genre=genre, scene=scene,
-                tempo=tempo, instrument=instrument, energy=energy
+                prompt_text=prompt_text,
             )
             logits_sum = logits.detach().float().sum()
             if not torch.isfinite(logits_sum).item():
@@ -586,14 +592,7 @@ class Trainer:
 
         for batch in self.val_loader:
             tokens = batch["tokens"].to(self.device)
-
-            # === FAST STRUCTURED PROMPT (same as training) ===
-            mood = batch["mood"].to(self.device)
-            genre = batch["genre"].to(self.device)
-            scene = batch["scene"].to(self.device)
-            tempo = batch["tempo"].to(self.device)
-            instrument = batch["instrument"].to(self.device)
-            energy = batch["energy"].to(self.device)
+            prompt_text = batch["prompt_text"]
 
             input_tokens = tokens[:, :-1]
             target_tokens = tokens[:, 1:]
@@ -601,8 +600,7 @@ class Trainer:
             with torch.cuda.amp.autocast(enabled=self.use_amp):
                 logits, _ = self.model(
                     input_tokens,
-                    mood=mood, genre=genre, scene=scene,
-                    tempo=tempo, instrument=instrument, energy=energy
+                    prompt_text=prompt_text,
                 )
                 loss = self.loss_fn(
                     logits.reshape(-1, logits.size(-1)),
@@ -615,10 +613,14 @@ class Trainer:
         return total_loss / max(1, num_batches)
 
     def _save_checkpoint(self, filename: str, epoch: int = None):
-        """Save model checkpoint with resume info."""
+        """Save model checkpoint with resume info (MiniLM backbone stripped)."""
         path = os.path.join(self.checkpoint_dir, filename)
+        if hasattr(self.model, "export_state_dict"):
+            model_sd = self.model.export_state_dict()
+        else:
+            model_sd = self.model.state_dict()
         save_dict = {
-            "model_state_dict": self.model.state_dict(),
+            "model_state_dict": model_sd,
             "optimizer_state_dict": self.optimizer.state_dict(),
             "global_step": self.global_step,
             "best_val_loss": self.best_val_loss,
@@ -627,6 +629,7 @@ class Trainer:
                 "vocab_size": self.model.vocab_size,
                 "d_model": self.model.d_model,
                 "max_seq_len": self.model.max_seq_len,
+                "conditioning": "english_text_minilm",
             },
         }
         if self.scaler:
