@@ -1,0 +1,418 @@
+\documentclass[oneside, a4paper, 12pt]{book}
+\usepackage[left=3.5cm, right=2.5cm, top=2cm, bottom=2cm]{geometry}
+
+\usepackage{graphicx}
+\usepackage{array}
+\graphicspath{{figures/}}
+
+\usepackage{indentfirst}
+\usepackage{hyperref}
+% expansion=false: tránh lỗi "auto expansion is only possible with scalable fonts"
+% khi dùng font T5 (gói vietnam) + Times/mathptmx trên Overleaf/MiKTeX
+\usepackage[protrusion=true,expansion=false]{microtype}
+\usepackage{pdfpages}
+\usepackage{lmodern}
+\usepackage{multirow}
+\usepackage{cite}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{wrapfig}
+\usepackage{tikz}
+\usetikzlibrary{patterns}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{setspace}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+\definecolor{figboxborder}{rgb}{0.45,0.50,0.55}
+\definecolor{figboxbg}{rgb}{0.96,0.97,0.98}
+\definecolor{figboxhint}{rgb}{0.25,0.30,0.35}
+
+\lstdefinestyle{mystyle}{
+	backgroundcolor=\color{backcolour},
+	commentstyle=\color{codegreen},
+	keywordstyle=\color{magenta},
+	numberstyle=\tiny\color{codegray},
+	stringstyle=\color{codepurple},
+	basicstyle=\ttfamily\footnotesize,
+	breakatwhitespace=false,
+	breaklines=true,
+	captionpos=b,
+	keepspaces=true,
+	numbers=left,
+	numbersep=5pt,
+	showspaces=false,
+	showstringspaces=false,
+	showtabs=false,
+	tabsize=2
+}
+\lstset{style=mystyle}
+
+\usepackage{amsmath,amssymb,latexsym,amscd,amsxtra,amsthm}
+\usepackage{mathtools}
+\usepackage{mathptmx}
+\usepackage{indentfirst}
+\usepackage{caption}
+\usepackage{aligned-overset}
+\usepackage{longtable}
+\usepackage{fancybox}
+\usepackage[utf8]{vietnam}
+\usepackage[tight,vietnam]{minitoc}
+\usepackage{anyfontsize}
+
+%==================================
+\usepackage{titletoc}
+\titlecontents{chapter}
+  [0pt]
+  {\bfseries}
+  {\chaptername\ \thecontentslabel\enskip}
+  {}
+  {\hfill\contentspage}
+
+%==================================
+\renewcommand{\thechapter}{\arabic{chapter}}
+\renewcommand{\thesection}{\arabic{chapter}.\arabic{section}}
+\newcommand{\eproof}{\hfill $\square$}
+\newcommand{\chm}{{\bfseries Chứng minh.}}
+\newenvironment{cm}{\chm}{\eproof}
+
+\theoremstyle{plain}
+\newtheorem{bd}{Bổ đề}[chapter]
+\providecommand*{\bdautorefname}{Bổ đề}
+\newtheorem{md}{Mệnh đề}[chapter]
+\providecommand*{\mdautorefname}{Mệnh đề}
+\newtheorem{hq}{Hệ quả}[chapter]
+\providecommand*{\hqautorefname}{Hệ quả}
+\newtheorem{dl}{\bfseries Định lý}[chapter]
+\providecommand*{\dlautorefname}{Định lý}
+\newtheorem{algorithm}{\bfseries Thuật toán}[chapter]
+\providecommand*{\algorithmautorefname}{Thuật toán}
+\newtheorem{gt}{\bfseries Giả thiết}[chapter]
+\providecommand*{\gtautorefname}{Giả thiết}
+\newtheorem{algorithmm}{Thuật toán}[chapter]
+\providecommand*{\algorithmmautorefname}{Thuật toán}
+
+\newtheorem*{namedthm}{\namedthmname}
+\newcounter{namedthm}
+\makeatletter
+\newenvironment{named}[1]
+  {\def\namedthmname{#1}%
+   \refstepcounter{namedthm}%
+   \namedthm\def\@currentlabel{#1}}
+  {\endnamedthm}
+\makeatother
+
+\theoremstyle{definition}
+\newtheorem{dn}{Định nghĩa}[chapter]
+\providecommand*{\dnautorefname}{Định nghĩa}
+\newtheorem{bt}{Bài toán}[chapter]
+\providecommand*{\btautorefname}{Bài toán}
+\newtheorem{vd}{\bfseries Ví dụ}[chapter]
+\providecommand*{\vdautorefname}{Ví dụ}
+
+\theoremstyle{remark}
+\newtheorem{kh}{Ký hiệu}[chapter]
+\newtheorem{nx}{\bfseries Nhận xét}[chapter]
+\newtheorem{cy}{Chú ý}[chapter]
+
+%------------------------------------------------------------------------------
+% Placeholder hình ảnh --- bổ sung file sau, giữ nguyên caption/label
+% Cách dùng: \figtodo{nhan}{Chú thích}{Mô tả nội dung cần vẽ/chụp}{ten_file}
+% Tùy chọn chiều cao: \figtodo[0.32\textheight]{nhan}{...}{...}{...}
+%------------------------------------------------------------------------------
+\newcommand{\figtodo}[5][0.28\textheight]{%
+  \begin{figure}[htbp]
+    \centering
+    \fcolorbox{figboxborder}{figboxbg}{%
+      \begin{minipage}[c][#1][c]{0.92\textwidth}
+        \centering
+        \color{figboxhint}
+        {\small\bfseries [Chỗ chèn hình --- bổ sung sau]}\\[0.55em]
+        {\scriptsize\bfseries Nội dung hình cần thể hiện:}\\[0.3em]
+        {\footnotesize\itshape #4}\\[0.65em]
+        {\scriptsize\ttfamily Tên file đề xuất: figures/{\detokenize{#5}}}\\[0.2em]
+        {\scriptsize Nguồn gợi ý: sơ đồ (Draw.io/PowerPoint/TikZ),
+          ảnh piano-roll, hoặc biểu đồ từ \texttt{compare/results}.}\\[0.15em]
+        {\scriptsize Khi đã có file: thay khung bằng
+          \texttt{\string\includegraphics}.}
+      \end{minipage}%
+    }%
+    \caption{#3}
+    \label{#2}
+  \end{figure}%
+}
+
+% Debug figtodo
+\renewcommand{\figtodo}[5][0.28\textheight]{%
+  \begin{figure}[htbp]
+    \centering
+    \fbox{\parbox{0.9\textwidth}{\small [PLACEHOLDER: #4]}}
+    \caption{#3}
+    \label{#2}
+  \end{figure}
+}
+
+\renewcommand{\baselinestretch}{1.5}
+\setlength{\oddsidemargin}{0.3cm}
+\setlength{\topmargin}{-1cm}
+\setlength{\headsep}{0.5cm}
+\textwidth=15.5cm
+\textheight=24.5cm
+\renewcommand{\bibname}{Tài liệu tham khảo}
+\renewcommand{\large}{\fontsize{14pt}{14pt}\selectfont}
+\renewcommand{\Large}{\fontsize{16pt}{16pt}\selectfont}
+\renewcommand{\LARGE}{\fontsize{15pt}{15pt}\selectfont}
+\renewcommand{\th}{\fontsize{18pt}{18pt}\selectfont}
+
+\pagestyle{myheadings}
+\usepackage{fancyhdr}
+\fancyhf{}
+\rfoot{\thepage\quad\ }
+\pagestyle{fancy}
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \rfoot{\thepage\quad\ }
+  \renewcommand{\headrulewidth}{0pt}
+}
+\renewcommand{\headrulewidth}{0pt}
+
+\newenvironment{mproof}{\paragraph{Chứng minh:}}{\hfill$\square$}
+\newenvironment{myproof}[2]{\paragraph{Proof of {#1} {#2}:}}{\hfill$\square$}
+\DeclarePairedDelimiter{\pro}{\langle}{\rangle}
+\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}
+\DeclarePairedDelimiter{\abs}{\lvert}{\rvert}
+\usepackage{xpatch}
+\makeatletter
+\AtBeginDocument{\xpatchcmd{\@thm}{\thm@headpunct{.}}{\thm@headpunct{}}{}{}}
+\makeatother
+\DeclareMathOperator{\vip}{VIP}
+\DeclareMathOperator{\svip}{SVIP}
+\DeclareMathOperator{\fix}{Fix}
+\allowdisplaybreaks
+
+% Hyperref setup (đặt sau các package khác)
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=black,
+  urlcolor=blue,
+  pdftitle={So sánh Music Transformer và Piano-roll Diffusion trong bài toán sinh nhạc},
+  pdfauthor={Nhóm sinh viên Đồ án tốt nghiệp}
+}
+
+\begin{document}
+
+\thispagestyle{empty}
+\setcounter{page}{1}
+\pagenumbering{roman}
+\pagenumbering{gobble}
+\newgeometry{left=3.5cm,right=2.5cm,top=2cm,bottom=2cm}
+
+\begin{center}
+\Large
+\vspace{-1cm}
+{\bfseries ĐẠI HỌC BÁCH KHOA HÀ NỘI}\\
+{\bfseries KHOA TOÁN -- TIN}
+\end{center}
+\vspace{4.5cm}
+\begin{center}
+    \fontsize{20pt}{16pt}\selectfont
+	{\bfseries ĐỒ ÁN TỐT NGHIỆP}\\
+	\fontsize{17pt}{15pt}\selectfont
+	\includegraphics[scale=0.08]{HUST_logo}\\
+	\vspace{1.25cm}
+	\fontsize{18pt}{20pt}\selectfont
+	\bfseries So sánh Music Transformer và Piano-roll Diffusion\\
+	trong bài toán sinh nhạc có điều kiện
+\end{center}
+\vspace{1cm}
+\begin{center}
+\fontsize{12pt}{14pt}\selectfont
+\begin{tabular}{ll}
+\textbf{PHẠM TUẤN ANH} & MSSV: 20195840 \\
+\textbf{TRẦN BÁ ĐẠT} & MSSV: \rule{3cm}{0.4pt} \\
+\textbf{NGUYỄN KHÁNH TRƯỜNG LỘC} & MSSV: \rule{3cm}{0.4pt} \\
+\textbf{PHẠM ĐÀM QUÂN} & MSSV: \rule{3cm}{0.4pt} \\
+\textbf{VŨ ĐỨC MINH} & MSSV: \rule{3cm}{0.4pt}
+\end{tabular}
+\vspace{0.6cm}
+\end{center}
+\vspace{2cm}
+\begin{center}
+\fontsize{13pt}{16pt}\selectfont
+\textbf{\begin{tabular}{l l}
+Giảng viên hướng dẫn:& \textmd{TS.\ Trịnh Văn Chiến $\underset{\text{Chữ ký của GVHD}}{\rule{3cm}{0.5pt}}$}\\
+\end{tabular}}
+\end{center}
+\vspace{2.5cm}
+\begin{center}
+\LARGE \textbf{HÀ NỘI, 07/2026}
+\end{center}
+
+
+\newpage
+\thispagestyle{empty}
+\newgeometry{left=3cm,right=2.8cm,top=2cm,bottom=2cm}
+\setcounter{page}{1}
+\thisfancypage{
+	\setlength{\fboxsep}{0.5cm}
+	\fbox}{}
+
+\fontsize{13pt}{16pt}\selectfont
+\bigbreak
+\begin{center}
+	{\bfseries NHẬN XÉT CỦA GIẢNG VIÊN HƯỚNG DẪN}
+\end{center}
+\bigbreak
+
+\fontsize{12pt}{14pt}\selectfont
+\begin{enumerate}
+	\item [{\bfseries 1.}]{\bfseries Mục tiêu và nội dung của đồ án}
+	\begin{enumerate}
+		\item Mục tiêu:
+		\item Nội dung:
+	\end{enumerate}
+	\item [{\bfseries 2.}] {\bfseries Kết quả đạt được}
+	\begin{enumerate}
+		\item
+		\item
+	\end{enumerate}
+	\item [{\bfseries 3.}]{\bfseries Ý thức làm việc của sinh viên:}
+\begin{enumerate}
+	\item
+	\item
+	\item
+\end{enumerate}
+\end{enumerate}
+\hspace{0.5\textwidth}
+\begin{minipage}{0.5\textwidth}
+	\noindent\begin{center}
+		\textit{Hà Nội, tháng \ldots\ năm 2026} \\
+		Giảng viên hướng dẫn\\ \vspace{2cm}
+		\textbf{TS.\ Trịnh Văn Chiến}
+	\end{center}
+\end{minipage}
+\restoregeometry
+
+
+\newpage
+\restoregeometry
+
+\newpage
+\fontsize{16pt}{18pt}\selectfont
+\thispagestyle{empty}
+
+{\bfseries Tóm tắt nội dung báo cáo}
+\fontsize{12pt}{16pt}\selectfont
+\bigskip
+
+Báo cáo nghiên cứu bài toán sinh nhạc nền có điều kiện dưới dạng MIDI. Điều kiện được tổ chức theo \textbf{hai tầng}: (i)~sáu thuộc tính rời rạc (\textit{mood}, \textit{genre}, \textit{scene}, \textit{tempo}, \textit{instrument}, \textit{energy}) dùng để gán nhãn dữ liệu, xây chú thích huấn luyện và tính chỉ số đánh giá; (ii)~một câu mô tả tiếng Anh đưa vào mô hình qua bộ mã hóa ngôn ngữ nhẹ \texttt{all-MiniLM-L6-v2} (đóng băng) kèm lớp chiếu học được --- cùng lớp mã nguồn dùng chung cho cả hai nhánh (mỗi nhánh vẫn huấn luyện projection riêng). Khi huấn luyện, câu thường được ghép theo mẫu từ sáu nhãn; khi suy luận/đánh giá có thể dùng câu viết sẵn hoặc câu ghép. Trọng tâm là \textbf{triển khai và so sánh có kiểm soát} hai họ kiến trúc tạo sinh: \textit{Music Transformer} (tự hồi quy trên chuỗi token sự kiện kiểu REMI) và \textit{Piano-roll Diffusion} (khuếch tán trên lưới cao độ--thời gian), trên cùng kho dữ liệu, cùng phân chia huấn luyện/kiểm định và cùng giao thức đánh giá.
+
+Hệ thống được hiện thực hóa theo quy trình đầu cuối (\textit{end-to-end}) bằng PyTorch. Nhánh Transformer sử dụng cơ chế chú ý chéo (\textit{cross-attention}) trên vector điều kiện từ câu văn bản và huấn luyện bằng hàm mất mát entropy chéo (\textit{cross-entropy}) có làm mượt nhãn. Nhánh Diffusion sử dụng UNet điều chế FiLM, lịch nhiễu cosine, hướng dẫn không dùng bộ phân loại (\textit{classifier-free guidance}, CFG), trung bình trượt tham số (EMA) và lấy mẫu DDIM. Kho dữ liệu đã xử lý gồm khoảng 14\,232 tệp MIDI (12\,809 mẫu huấn luyện / 1\,423 mẫu kiểm định). Thực nghiệm 30 epoch trên GPU RTX~3060 cho thấy cả hai nhánh hội tụ ổn định trên hàm mục tiêu riêng (entropy chéo kiểm định $\approx 2{,}39$, độ bối rối $\approx 10{,}9$ với Transformer; sai số bình phương trung bình kiểm định $\approx 0{,}0029$ với Diffusion). Về các chỉ số cấu trúc MIDI, Transformer cho mật độ nốt và đa âm ở mức thưa hơn, đồng thời chỉ số khớp nhạc cụ tăng theo quá trình học (tới $\approx 0{,}37$); Diffusion đạt MSE thấp nhưng mật độ và đa âm rất cao, trong khi chỉ số khớp nhạc cụ bằng $1{,}0$ gắn với việc gán chương trình nhạc cụ (\textit{program}) theo nhãn instrument khi giải mã, không phản ánh thuần túy việc học âm sắc (\textit{timbre}).
+
+Báo cáo không khẳng định vượt các hệ text-to-audio quy mô lớn. Đóng góp chính gồm quy trình so sánh thống nhất (kèm đặc tả điều kiện text dùng chung), phân tích liên kết giữa thiết kế triển khai và kết quả đo được (bao gồm các hạn chế khi diễn giải chỉ số), cùng các nhận định về sự đánh đổi phương pháp dựa trên số liệu thực nghiệm.
+
+Báo cáo gồm bốn chương: giới thiệu; cơ sở lý thuyết và công trình liên quan; triển khai hệ thống; kết quả thực nghiệm và đánh giá --- kèm phần kết luận.
+
+\tableofcontents
+
+\newpage
+
+\thispagestyle{fancy}
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\input{content/chap1}
+\input{content/chap2}
+\input{content/chap3}
+\input{content/chap4}
+
+
+\chapter*{Kết luận}
+\addcontentsline{toc}{chapter}{Kết luận}
+\setcounter{section}{0}
+\renewcommand*{\thesection}{\the\value{section}}
+
+Báo cáo đã triển khai và so sánh hai hệ sinh MIDI có điều kiện --- Music Transformer và Piano-roll Diffusion --- trên cùng quy trình dữ liệu, cùng pipeline mã hóa câu tiếng Anh (MiniLM đóng băng + lớp chiếu; projection học riêng từng nhánh), cùng kho đã xử lý và cùng mô-đun đánh giá. Sáu thuộc tính có cấu trúc vẫn đóng vai trò gán nhãn, sinh chú thích huấn luyện và meta chỉ số. Các câu hỏi nghiên cứu về hội tụ hàm mất mát, chất lượng cấu trúc MIDI và chi phí tính toán đã được trả lời dựa trên nhật ký huấn luyện và các chỉ số khách quan, trong điều kiện chưa thực hiện đánh giá cảm nhận nghe có kiểm soát.
+
+\subsection*{Kết quả đạt được}
+
+\begin{enumerate}
+    \item Xây dựng đặc tả đầu vào--đầu ra thống nhất (câu English $\rightarrow$ MIDI) và quy trình dữ liệu dùng chung (khoảng 14\,232 tệp MIDI; phân chia 12\,809/1\,423), kèm cầu nối nhãn sáu thuộc tính $\rightarrow$ chú thích tiếng Anh.
+    \item Hiện thực hóa theo quy trình đầu cuối hai nhánh tạo sinh (REMI kết hợp Transformer và piano-roll kết hợp UNet diffusion), với pipeline \texttt{TextPromptEncoder} dùng chung (projection học riêng), kèm huấn luyện, lưu điểm kiểm tra (\textit{checkpoint}) và sinh mẫu.
+    \item Thiết lập giao thức đánh giá có thể tái lập (20 câu prompt chuẩn, chỉ số cấu trúc MIDI, ghi nhận thời gian, bộ nhớ GPU và số tham số).
+    \item Quan sát thực nghiệm chính: cả hai nhánh hội tụ tốt trên hàm mục tiêu riêng; Transformer cho đa âm và mật độ thưa hơn, chỉ số khớp nhạc cụ tăng theo quá trình học; Diffusion đạt MSE thấp nhưng mật độ và đa âm cao, chỉ số khớp nhạc cụ bằng $1{,}0$ gắn với bước gán chương trình nhạc cụ sau sinh.
+    \item Làm rõ sự đánh đổi phương pháp: không so sánh trực tiếp entropy chéo với MSE; mọi chỉ số cần được diễn giải gắn với chi tiết triển khai tương ứng.
+\end{enumerate}
+
+\subsection*{Hạn chế}
+
+\begin{enumerate}
+    \item Chưa có đánh giá cảm nhận (MOS, thử nghiệm A/B) hay chỉ số phân phối trên audio (FAD, CLAP).
+    \item Câu điều kiện huấn luyện chủ yếu sinh từ mẫu template trên sáu nhãn (chưa đa dạng hóa diễn đạt); backbone MiniLM đóng băng nên không tinh chỉnh miền nhạc; vector điều kiện vẫn được nén thành một token/$c$ toàn cục.
+    \item Nhánh Diffusion dùng piano-roll một kênh; bước ngưỡng hóa và gán chương trình nhạc cụ cố định làm lệch một số chỉ số so sánh.
+    \item Chưa thực hiện phân tích loại trừ (\textit{ablation}) đầy đủ và chưa có đường cơ sở (\textit{baseline}) ngoài kho mã nguồn của đồ án.
+\end{enumerate}
+
+\subsection*{Hướng phát triển}
+
+\begin{enumerate}
+    \item Cải thiện nhánh Diffusion theo hướng thưa hóa / biểu diễn onset--frame và quy trình giải mã; tách chỉ số chương trình nhạc cụ bị gán cố định khỏi bảng so sánh công bằng.
+    \item Nâng cao điều kiện hóa text: đa dạng hóa caption, thử CLAP/encoder nhạc--ngôn ngữ, hoặc nhiều token điều kiện; bổ sung hàm mất mát phụ cho nhạc cụ ở nhánh Transformer.
+    \item Bổ sung đánh giá cảm nhận quy mô nhỏ và thống kê tham chiếu từ tập huấn luyện.
+    \item Mở rộng dữ liệu đã lọc theo miền game/piano khi điều kiện tài nguyên cho phép.
+\end{enumerate}
+
+Tóm lại, giá trị của báo cáo nằm ở \textbf{thực nghiệm so sánh thống nhất} và \textbf{phân tích trung thực} giữa hai thiên kiến quy nạp (\textit{inductive bias}) tạo sinh trên bài toán MIDI có điều kiện bằng text ở quy mô đồ án tốt nghiệp, chứ không nằm ở tuyên bố vượt các hệ text-to-music thương mại.
+
+
+\addtocontents{toc}{\protect\setcounter{tocdepth}{0}}
+\setcounter{section}{0}
+\renewcommand*{\thesection}{\the\value{section}}
+\begin{thebibliography}{99}\rm
+\addcontentsline{toc}{chapter}{\bfseries Tài liệu tham khảo}
+
+\bibitem{vaswani2017attention}
+A.~Vaswani et al., \textit{Attention is All You Need}, NeurIPS, 2017.
+
+\bibitem{huang2018music}
+C.-Z.~A.~Huang et al., \textit{Music Transformer: Generating Music with Long-Term Structure}, ICLR, 2019.
+
+\bibitem{ho2020ddpm}
+J.~Ho, A.~Jain, and P.~Abbeel, \textit{Denoising Diffusion Probabilistic Models}, NeurIPS, 2020.
+
+\bibitem{song2021ddim}
+J.~Song, C.~Meng, and S.~Ermon, \textit{Denoising Diffusion Implicit Models}, ICLR, 2021.
+
+\bibitem{nichol2021improved}
+A.~Q.~Nichol and P.~Dhariwal, \textit{Improved Denoising Diffusion Probabilistic Models}, ICML, 2021.
+
+\bibitem{ho2022cfg}
+J.~Ho and T.~Salimans, \textit{Classifier-Free Diffusion Guidance}, NeurIPS Workshop on Deep Generative Models, 2021.
+
+\bibitem{holtzman2020curious}
+A.~Holtzman et al., \textit{The Curious Case of Neural Text Degeneration}, ICLR, 2020.
+
+\bibitem{agostinelli2023musiclm}
+A.~Agostinelli et al., \textit{MusicLM: Generating Music From Text}, arXiv:2301.11325, 2023.
+
+\bibitem{copet2023musicgen}
+J.~Copet et al., \textit{Simple and Controllable Music Generation} (MusicGen), NeurIPS, 2023.
+
+\bibitem{liu2023audioldm}
+H.~Liu et al., \textit{AudioLDM: Text-to-Audio Generation with Latent Diffusion Models}, ICML, 2023.
+
+\bibitem{hawthorne2018maestro}
+C.~Hawthorne et al., \textit{Enabling Factorized Piano Music Modeling and Generation with the MAESTRO Dataset}, ICLR, 2019.
+
+\bibitem{commu2023}
+H.~Lee et al., \textit{ComMU: Dataset for Combinatorial Music Generation}, NeurIPS Datasets and Benchmarks, 2022.
+
+\end{thebibliography}
+
+\end{document}

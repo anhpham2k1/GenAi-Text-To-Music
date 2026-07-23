@@ -2,7 +2,7 @@
 Generate fixed eval prompts from a Transformer checkpoint and log quality CSV.
 
 Usage (from GenAI_Transformer/):
-  python generate_eval.py --checkpoint checkpoints/checkpoint_epoch_5.pt --epoch 5
+  python generate_eval.py --checkpoint checkpoints/checkpoint_epoch_5.pt --epoch 5 --evaluate
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from compare.prompt_schema import labels_to_ids, normalize_structured
+from compare.caption import entry_to_prompt_text, structured_fields_from_entry
 
 
 def load_config(path: str) -> dict:
@@ -80,7 +80,7 @@ def main():
         use_qk_norm=True,
         weight_tying=True,
     )
-    model.load_state_dict(ckpt["model_state_dict"])
+    model.load_state_dict(ckpt["model_state_dict"], strict=False)
     generator = MusicGenerator(model, tokenizer, device=args.device)
 
     meta = {}
@@ -88,17 +88,17 @@ def main():
     for p in prompts:
         fname = f"{p['id']}.mid"
         path = os.path.join(out_dir, fname)
-        labels = normalize_structured(**p)
-        ids = labels_to_ids(labels)
+        text = entry_to_prompt_text(p)
+        labels = structured_fields_from_entry(p)
         generator.generate_midi(
             output_path=path,
+            prompt=text,
             max_length=args.max_length,
             temperature=args.temperature,
             top_p=args.top_p,
-            **ids,
         )
-        meta[fname] = {**labels, "id": p.get("id", "")}
-        print(f"  saved {fname}")
+        meta[fname] = {**labels, "id": p.get("id", ""), "text": text}
+        print(f"  saved {fname}  |  {text}")
 
     total_t = time.perf_counter() - t0
     meta_path = os.path.join(out_dir, "meta.json")

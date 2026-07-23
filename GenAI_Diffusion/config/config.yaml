@@ -30,6 +30,9 @@ diffusion:
   eta: 0.0                   # 0 = deterministic DDIM
 
 prompt:
+  # English free-text → MiniLM (freeze) + trainable projection → cond_dim
+  text_model: "sentence-transformers/all-MiniLM-L6-v2"
+  max_text_length: 64
   num_moods: 10
   num_genres: 10
   num_scenes: 10
@@ -54,6 +57,7 @@ paths:
   # Shared Ky3/data (old + new datasets)
   data_dir: "../data/processed"
   labels_file: "../data/labels/labels.json"
+  captions_file: "../data/labels/captions.json"
   split_file: "../compare/split.json"
   checkpoints_dir: "checkpoints"
   outputs_dir: "outputs"

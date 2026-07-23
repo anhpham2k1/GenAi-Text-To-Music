@@ -1,5 +1,5 @@
 """
-Train improved conditional piano-roll diffusion.
+Train improved conditional piano-roll diffusion (English text + MiniLM).
 
 Usage:
   python train.py --epochs 30
@@ -18,7 +18,7 @@ import yaml
 
 from src.data.dataset import create_dataloaders
 from src.model.diffusion import GaussianDiffusion
-from src.model.prompt_encoder import PromptEncoder
+from src.model.prompt_encoder import TextPromptEncoder
 from src.model.unet import ConditionalUNet
 from src.training.trainer import DiffusionTrainer
 
@@ -52,6 +52,8 @@ def main():
     parser.add_argument("--max_files", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--amp", action="store_true", help="Enable AMP fp16")
+    parser.add_argument("--no_cudnn", action="store_true", help="Disable cuDNN")
     args = parser.parse_args()
 
     base = os.path.dirname(os.path.abspath(__file__))
@@ -70,6 +72,9 @@ def main():
     data_dir = _resolve(base, paths.get("data_dir", "../data/processed"))
     labels_file = _resolve(base, paths.get("labels_file", "../data/labels/labels.json"))
     split_file = _resolve(base, paths.get("split_file", "../compare/split.json"))
+    captions_file = _resolve(base, paths.get("captions_file", "../data/labels/captions.json"))
+    if not os.path.exists(captions_file):
+        captions_file = None
     ckpt_dir = _resolve(base, paths.get("checkpoints_dir", "checkpoints"))
     log_dir = _resolve(base, paths.get("logs_dir", "logs"))
     results_dir = _resolve(base, paths.get("results_dir", "../compare/results"))
@@ -83,9 +88,10 @@ def main():
     fs = pr_cfg.get("fs", 24)
 
     print("=" * 60)
-    print("  DIFFUSION TRAIN (improved: CFG + EMA + cosine + attn)")
+    print("  DIFFUSION TRAIN (English text + MiniLM + CFG + EMA)")
     print("=" * 60)
     print(f"  data: {data_dir}")
+    print(f"  captions: {captions_file or '(from labels on the fly)'}")
     print(f"  frames={n_frames} fs={fs}  epochs={epochs} batch={batch_size}")
 
     train_loader, val_loader, _, _ = create_dataloaders(
@@ -101,6 +107,7 @@ def main():
         seed=seed,
         max_files=args.max_files,
         pitch_shift_max=pr_cfg.get("pitch_shift_max", 2),
+        captions_file=captions_file,
     )
 
     cond_dim = model_cfg.get("cond_dim", 256)
@@ -114,14 +121,11 @@ def main():
         use_mid_attn=model_cfg.get("use_mid_attn", True),
         attn_heads=model_cfg.get("attn_heads", 4),
     )
-    prompt_encoder = PromptEncoder(
+    prompt_encoder = TextPromptEncoder(
         d_model=cond_dim,
-        num_moods=prompt_cfg.get("num_moods", 10),
-        num_genres=prompt_cfg.get("num_genres", 10),
-        num_scenes=prompt_cfg.get("num_scenes", 10),
-        num_tempos=prompt_cfg.get("num_tempos", 5),
-        num_instruments=prompt_cfg.get("num_instruments", 8),
-        num_energies=prompt_cfg.get("num_energies", 5),
+        model_name=prompt_cfg.get("text_model", "sentence-transformers/all-MiniLM-L6-v2"),
+        max_length=int(prompt_cfg.get("max_text_length", 64)),
+        freeze_backbone=True,
     )
 
     diffusion = GaussianDiffusion(
@@ -156,12 +160,15 @@ def main():
             "pianoroll": pr_cfg,
             "diffusion": diff_cfg,
             "prompt": prompt_cfg,
+            "conditioning": "english_text_minilm",
         },
+        use_amp=args.amp,
+        disable_cudnn=args.no_cudnn,
     )
     trainer.train()
     print("\n✅ Diffusion training complete.")
     print(f"   Checkpoints: {ckpt_dir}")
-    print(f"   Tip: generate with guidance_scale=3.0–4.0, sample_steps=80")
+    print(f"   Tip: generate with --prompt \"...\" guidance_scale=3.0–4.0")
 
 
 if __name__ == "__main__":

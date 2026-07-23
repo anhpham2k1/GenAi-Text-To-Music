@@ -1,0 +1,185 @@
+\chapter{Giới thiệu}
+\label{chap:intro}
+
+Sự phát triển mạnh của các mô hình tạo sinh (\textit{generative models}) trong những năm gần đây không chỉ thay đổi cách máy tính sinh văn bản hay hình ảnh, mà còn mở rộng sang các miền đa phương thức khác, trong đó có âm nhạc. Trong công nghiệp game và truyền thông tương tác, nhu cầu nhạc nền (\textit{background music} --- BGM) gắn với ngữ cảnh cụ thể --- ví dụ không gian làng yên tĩnh, trận chiến căng thẳng, hoặc bối cảnh giả tưởng --- ngày càng tăng, trong khi chi phí thuê nhạc sĩ chuyên nghiệp thường vượt khả năng của nhiều nhóm phát triển quy mô nhỏ. Trong bối cảnh đó, bài toán \textbf{sinh nhạc có điều kiện từ mô tả} trở thành hướng nghiên cứu vừa có ý nghĩa thực tiễn, vừa phù hợp để khảo sát các họ kiến trúc tạo sinh khác nhau trên cùng một bài toán có thể kiểm soát.
+
+Báo cáo này không hướng tới xây dựng hệ thống thương mại quy mô lớn hay tái hiện các mô hình audio tiên tiến nhất. Trọng tâm là \textbf{triển khai và so sánh có kiểm soát} hai hướng sinh MIDI phổ biến trong học sâu: mô hình tự hồi quy dựa trên Transformer và mô hình khuếch tán trên piano-roll. Chương này đặt bối cảnh, phát biểu bài toán, nêu mục tiêu cùng các câu hỏi nghiên cứu, đồng thời khoanh phạm vi và đóng góp để các chương sau triển khai và đánh giá một cách nhất quán.
+
+%------------------------------------------------------------------------------
+\section{Bối cảnh và động lực}
+\label{sec:ch1-motivation}
+
+Trong quy trình sản xuất game, nhạc nền không chỉ đóng vai trò trang trí mà còn điều hướng cảm xúc và nhịp độ trải nghiệm. Cùng một khu vực, người chơi có thể cần đoạn nhạc êm khi khám phá, rồi chuyển sang nhạc dồn dập hơn khi vào trận chiến. Ngay trong cùng thể loại (ví dụ fantasy), nhạc cho cảnh làng yên tĩnh và nhạc cho cảnh hầm ngục căng thẳng thường khác nhau về mật độ nốt, cao độ trung bình và màu sắc nhạc cụ. Việc chuẩn bị thủ công toàn bộ các biến thể này tốn kém về thời gian và nhân lực. Một công cụ sinh nhạc tự động mà vẫn \textit{kiểm soát được} theo các trục như cảm xúc, bối cảnh và nhạc cụ có tiềm năng hỗ trợ nguyên mẫu nhanh, gợi ý ý tưởng, hoặc tạo lớp BGM dự phòng trong giai đoạn tiền sản xuất.
+
+Về mặt kỹ thuật, sinh nhạc khác bài toán phân loại ảnh hay hồi quy một giá trị vô hướng: với cùng một mô tả, có thể tồn tại nhiều bản MIDI hợp lệ, không có đáp án duy nhất. Mô hình cần học cách tạo nốt, nhịp và hòa âm có cấu trúc hợp lý, đồng thời mỗi lần lấy mẫu vẫn có thể cho biến thể khác nhau. Muốn vậy, mô hình thường học một phân phối có điều kiện rồi lấy mẫu từ phân phối đó, thay vì ánh xạ một--một từ nhãn sang đầu ra. Việc chọn kiến trúc kéo theo các giả định khác nhau. Cụ thể, tự hồi quy trên chuỗi sự kiện rời rạc (họ Transformer) và khuếch tán trên biểu diễn liên tục (họ Diffusion) khác nhau về không gian đầu ra, hàm mất mát, và cách đưa điều kiện (prompt) vào mô hình.
+
+Động lực thứ hai mang tính phương pháp luận. Trong học phần và tài liệu về AI tạo sinh, Transformer (kèm các kỹ thuật lấy mẫu chuỗi) và Diffusion (kèm lịch nhiễu, CFG, DDIM) thường được trình bày như hai họ riêng biệt. Người học dễ nắm công thức từng họ, nhưng ít khi quan sát \textbf{cùng một bài toán, cùng một tập dữ liệu và cùng giao thức đánh giá} khi hai họ được hiện thực hóa theo quy trình đầu cuối. Thiếu một khung so sánh như vậy khiến việc bàn luận ưu--nhược điểm dễ rơi vào cảm tính hoặc dựa trên kết quả ở thang đo và miền dữ liệu không tương thích (ví dụ so sánh trực tiếp hàm mất mát của mô hình ngôn ngữ với MSE khử nhiễu, hoặc so sánh sự kiện MIDI với dạng sóng âm thanh).
+
+Tóm lại, báo cáo xây dựng một thực nghiệm so sánh \textit{thống nhất} trong phạm vi khả thi của đồ án tốt nghiệp: dùng MIDI thay vì tín hiệu âm thanh thô (\textit{raw audio}) để giảm chi phí tính toán; dùng \textbf{câu mô tả tiếng Anh} làm đầu vào mô hình (sinh từ nhãn có cấu trúc khi huấn luyện, hoặc nhập trực tiếp khi suy luận) kèm encoder ngôn ngữ nhẹ đóng băng để hai nhánh nhận cùng không gian điều kiện; và đo lường cả chất lượng cấu trúc MIDI lẫn chi phí huấn luyện/suy luận. Cách tiếp cận này chấp nhận đánh đổi mức độ chân thực nghe được so với các hệ audio quy mô lớn, đổi lấy khả năng phân tích sâu phần triển khai và kết quả trên cùng giao thức.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{system_overview_text}
+    \caption{Tổng quan bài toán sinh MIDI có điều kiện: nhãn/câu English $\rightarrow$
+    MiniLM đóng băng + projection $\rightarrow$ hai nhánh Music Transformer và
+    Piano-roll Diffusion $\rightarrow$ tệp MIDI, so sánh bằng chỉ số cấu trúc MIDI.}
+    \label{fig:ch1-pipeline-overview}
+\end{figure}
+
+%------------------------------------------------------------------------------
+\section{Phát biểu bài toán}
+\label{sec:ch1-problem}
+
+Bài toán được nghiên cứu có thể phát biểu như sau. Cho một mô tả điều khiển mang ngữ nghĩa âm nhạc--game, hệ thống cần sinh ra một đoạn nhạc dưới dạng tệp MIDI, phản ánh mô tả đó ở mức khả dĩ về mặt thống kê và cấu trúc.
+
+Điều kiện được tổ chức theo \textbf{hai tầng} bổ sung cho nhau.
+
+\paragraph{Tầng ngữ nghĩa có cấu trúc (nhãn).}
+Sáu thuộc tính rời rạc theo lớp (\textit{categorical}) được giữ làm lược đồ gán nhãn và siêu dữ liệu:
+
+\begin{center}
+\textit{mood}, \textit{genre}, \textit{scene}, \textit{tempo}, \textit{instrument}, \textit{energy}.
+\end{center}
+
+Mỗi thuộc tính nhận giá trị trong một từ vựng hữu hạn (ví dụ mood: \texttt{happy}, \texttt{dark}, \texttt{epic}; instrument: \texttt{piano}, \texttt{strings}, \texttt{brass}, \ldots). Lược đồ này đồng bộ với siêu dữ liệu ComMU và các nguồn MIDI có chú thích, đồng thời cung cấp meta cho chỉ số đánh giá (ví dụ khớp nhóm nhạc cụ theo \texttt{instrument}).
+
+\paragraph{Tầng điều kiện đưa vào mô hình (câu tiếng Anh).}
+Đầu vào thực tế của hai backbone tạo sinh không còn là sáu chỉ số nguyên nhúng riêng, mà là \textbf{một câu mô tả tiếng Anh}. Khi huấn luyện, câu thường được sinh tự động từ sáu nhãn theo mẫu cố định (ví dụ \textit{``happy fantasy village music, fast tempo, piano, medium energy''}). Khi suy luận, người dùng có thể nhập trực tiếp một câu, hoặc hệ thống ghép từ các trường có cấu trúc nếu chỉ cung cấp nhãn. Câu đi qua bộ mã hóa \texttt{sentence-transformers/all-MiniLM-L6-v2} (\textbf{đóng băng}) rồi một lớp chiếu (\textit{projection}) học được, cho ra vector điều kiện $c\in\mathbb{R}^{d}$. Hai nhánh dùng \textbf{cùng lớp mã nguồn} encoder text, nhưng mỗi nhánh huấn luyện projection (và mạng nhạc) riêng; backbone MiniLM không nhận gradient. Cách làm này giữ chi phí encoder ngôn ngữ ở mức nhẹ, đồng thời buộc hai mô hình nền nhận \textbf{cùng dạng biểu diễn $c$} (cùng pipeline text$\rightarrow$vector), đúng yêu cầu so sánh công bằng về đặc tả điều kiện.
+
+Cần phân biệt: giao diện là câu tiếng Anh, nhưng miền câu khi huấn luyện \textbf{không} phải corpus văn bản tự do rộng; chủ yếu là biến thể của cùng khung template. Do đó đồ án gần text-to-music ở mức giao diện và pipeline, chứ không khẳng định khả năng hiểu mọi mô tả ngôn ngữ tự nhiên như các hệ quy mô lớn.
+
+Việc tách hai tầng nhằm ba mục tiêu: (i)~tận dụng nhãn có cấu trúc sẵn có trong dữ liệu; (ii)~đưa giao diện suy luận gần text-to-music hơn so với chỉ chọn dropdown nhãn; (iii)~không kéo theo encoder nhạc--ngôn ngữ quy mô lớn (CLAP, MuLan, \ldots) vào vòng so sánh, để biến số chính vẫn là Transformer so với Diffusion.
+
+Đầu ra chuẩn để so sánh là tệp \textbf{MIDI} (\texttt{.mid}), tức chuỗi sự kiện nốt (cao độ, thời điểm, cường độ, program nhạc cụ) chứ không phải waveform. MIDI cho phép đánh giá khách quan một số đặc trưng cấu trúc --- mật độ nốt, độ đa âm, tỉ lệ im lặng, phân bố pitch-class, mức khớp nhóm nhạc cụ --- mà không phụ thuộc SoundFont hay chất lượng render. Việc chuyển MIDI sang WAV, nếu có, chỉ mang tính minh họa nghe thử và không tham gia hàm mất mát huấn luyện.
+
+Về mặt hình thức, bài toán là \textit{sinh có điều kiện}: học xấp xỉ phân phối $p(\text{music}\mid c)$ với $c$ là biểu diễn của câu tiếng Anh sau MiniLM và projection, rồi lấy mẫu tại suy luận. ``Music'' được cụ thể hóa khác nhau theo từng nhánh (chuỗi token sự kiện hoặc lưới piano-roll), nhưng \textbf{đặc tả đầu vào--đầu ra bên ngoài} (câu English $\rightarrow$ \texttt{.mid}) giữ nguyên. Đây là cơ sở để hai mô hình có thể được đặt cạnh nhau trong cùng quy trình dữ liệu và đánh giá, dù thiên kiến quy nạp (\textit{inductive bias}) bên trong hoàn toàn khác nhau.
+
+% Đặc tả I/O đã được minh họa trong Hình~\ref{fig:ch1-pipeline-overview}
+% (cùng pipeline text$\rightarrow c$, hai generator, đầu ra MIDI).
+
+%------------------------------------------------------------------------------
+\section{Hai hướng kiến trúc cần so sánh}
+\label{sec:ch1-two-arch}
+
+Trong bài toán vừa nêu, đồ án triển khai và so sánh hai hướng kiến trúc đại diện cho hai dòng tạo sinh phổ biến.
+
+\paragraph{Music Transformer (sinh tuần tự theo token).}
+Nhánh thứ nhất coi bản nhạc MIDI như một \textbf{chuỗi sự kiện}, tương tự cách mô hình ngôn ngữ coi câu văn như chuỗi từ. Mỗi sự kiện được mã hóa thành token theo kiểu REMI: bật/tắt nốt (\texttt{NOTE\_ON}/\texttt{NOTE\_OFF}), dịch thời gian, vận tốc, nhóm nhạc cụ, v.v. Mô hình Transformer decoder học \textbf{dự đoán token tiếp theo} khi đã biết các token trước đó và vector điều kiện $c$ từ câu tiếng Anh (đưa vào qua cross-attention). Khi sinh, mô hình tạo bản nhạc \textbf{từng bước}: hoàn tất token hiện tại rồi mới sang token kế tiếp; mức ngẫu nhiên khi chọn token có thể điều chỉnh bằng temperature và top-$p$. Cách tiếp cận này phù hợp với MIDI vì MIDI vốn là các sự kiện rời rạc tại các thời điểm rời rạc.
+
+\paragraph{Piano-roll Diffusion (sinh trên lưới cao độ--thời gian).}
+Nhánh thứ hai không sinh token. Đoạn MIDI được biến thành một \textbf{ma trận hai chiều} (piano-roll): một trục là cao độ, một trục là thời gian, mỗi ô phản ánh mức kích hoạt/vận tốc của nốt. Mạng UNet học \textbf{khử nhiễu} trên ma trận này trong quy trình khuếch tán có điều kiện theo cùng vector $c$ (đưa vào bằng FiLM). Khi sinh, mô hình bắt đầu từ nhiễu ngẫu nhiên rồi làm sạch dần (DDIM); mức bám prompt có thể tăng nhờ classifier-free guidance (CFG). Cuối cùng ma trận được ngưỡng hóa và chuyển lại thành tệp MIDI. Cách tiếp cận gần với sinh ảnh: mô hình ước lượng toàn bộ ``bề mặt'' nhạc trên lưới, thay vì quyết định từng sự kiện nốt theo thứ tự thời gian như Transformer.
+
+Tóm lại, hai hướng khác nhau về bản chất biểu diễn và mục tiêu học. Một bên sinh nhạc bằng \textbf{chuỗi token}, bên kia sinh trên \textbf{lưới cao độ--thời gian}. Một bên tối ưu cross-entropy trên token, bên kia tối ưu MSE khử nhiễu. Cách \textit{chèn} $c$ vào mô hình (cross-attention so với FiLM) và cách xuất tệp MIDI (đặc biệt phần nhạc cụ) cũng không giống nhau, dù \textbf{nguồn $c$} là chung. Bảng~\ref{tab:ch1-arch-preview} tóm tắt các điểm khác biệt; chi tiết được trình bày ở các chương sau.
+
+\begin{table}[htbp]
+\centering
+\caption{Đối chiếu hai hướng trên cùng bài toán (prompt $\rightarrow$ MIDI)}
+\label{tab:ch1-arch-preview}
+\begin{tabular}{p{3.2cm}p{5.5cm}p{5.5cm}}
+\toprule
+\textbf{Tiêu chí} & \textbf{Music Transformer} & \textbf{Piano-roll Diffusion} \\
+\midrule
+Biểu diễn nhạc &
+Chuỗi token sự kiện (REMI) &
+Ma trận piano-roll (cao độ $\times$ thời gian) \\
+\midrule
+Mô hình chính &
+Transformer decoder &
+UNet khử nhiễu \\
+\midrule
+Mục tiêu học &
+Dự đoán token tiếp theo (CE) &
+Dự đoán nhiễu trên ma trận (MSE) \\
+\midrule
+Cơ chế sinh &
+Từng token; temperature / top-$p$ &
+Từ nhiễu $\rightarrow$ làm sạch dần (DDIM + CFG) \\
+\midrule
+Nhạc cụ trong tệp MIDI &
+Do mô hình sinh token nhạc cụ &
+Gán khi chuyển ma trận $\rightarrow$ MIDI \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Một lưu ý phương pháp quan trọng: \textbf{không thể xếp hạng hai mô hình chỉ bằng giá trị hàm mất mát}. Hàm mất mát của Transformer và của Diffusion đo hai đại lượng khác nhau, không cùng đơn vị. Ngay cả khi dùng cùng tên chỉ số (ví dụ mức khớp nhạc cụ), ý nghĩa cũng có thể khác: một nhánh phải \textit{tự sinh} thông tin nhạc cụ trong chuỗi token, nhánh kia có thể \textit{gán} nhạc cụ khi chuyển ma trận thành MIDI. Báo cáo sẽ làm rõ các điểm này khi mô tả triển khai và khi phân tích kết quả, thay vì đưa ra bảng xếp hạng đơn giản.
+
+Về sự đánh đổi dự kiến (sẽ được kiểm chứng bằng số liệu), có thể hình dung như sau. Transformer thường cho bản nhạc thưa hơn, có thứ tự thời gian rõ vì sinh từng sự kiện; đổi lại, chuỗi dài thường chậm hơn và dễ dừng sớm hoặc lệch prompt. Diffusion sinh cả ma trận (sau nhiều bước khử nhiễu), thuận tiện kết hợp CFG hay EMA; nhưng ma trận gộp nhiều track MIDI và hàm mất mát MSE không trực tiếp phạt mật độ nốt quá cao, nên nếu bước ngưỡng hóa/xuất MIDI không phù hợp, mật độ nốt có thể lệch so với dữ liệu thật. Chương~\ref{chap:theory} trình bày nền tảng; chương triển khai và chương thực nghiệm lần lượt gắn các nhận định này với mã nguồn và nhật ký huấn luyện.
+
+%------------------------------------------------------------------------------
+\section{Mục tiêu và câu hỏi nghiên cứu}
+\label{sec:ch1-objectives}
+
+\subsection{Mục tiêu}
+
+Mục tiêu tổng quát của báo cáo là \textbf{xây dựng, huấn luyện và so sánh có kiểm soát} hai hệ sinh MIDI có điều kiện --- Music Transformer và Piano-roll Diffusion --- trên cùng đặc tả text$\rightarrow$MIDI, cùng kho dữ liệu và cùng giao thức đánh giá, từ đó rút ra nhận định có căn cứ về ưu--nhược điểm và điều kiện phù hợp của từng hướng.
+
+Cụ thể, báo cáo cần: (1)~thống nhất đầu vào--đầu ra (câu English $\rightarrow$ MIDI; nhãn sáu thuộc tính làm nguồn caption và meta đánh giá) và quy trình dữ liệu dùng chung, kể cả phân chia huấn luyện/kiểm định cố định; (2)~triển khai trọn vẹn hai nhánh từ tiền xử lý, mã hóa text, huấn luyện đến sinh mẫu (kèm AMP, tích lũy gradient, EMA, CFG khi có trong mã nguồn); (3)~xây dựng mô-đun đánh giá trên MIDI sinh ra (cấu trúc nốt và chi phí), đồng thời nêu rõ cách diễn giải từng chỉ số; (4)~phân tích theo các mốc epoch để trả lời các câu hỏi dưới đây bằng số liệu, không bằng cảm tính.
+
+\subsection{Câu hỏi nghiên cứu}
+
+Các câu hỏi được đặt sao cho \textbf{có thể trả lời bằng triển khai và thực nghiệm} trong khuôn khổ đồ án.
+
+\begin{enumerate}
+    \item[\textbf{RQ1.}]
+    Trên cùng tập dữ liệu và cùng phân chia, hành vi hội tụ của hai nhánh (hàm mất mát huấn luyện/kiểm định, và độ bối rối với nhánh Transformer) diễn biến như thế nào qua các epoch? Mức độ ổn định và quan hệ huấn luyện--kiểm định phản ánh điều gì về under/overfitting trong từng không gian mục tiêu?
+
+    \item[\textbf{RQ2.}]
+    Khi đánh giá trên cùng bộ prompt chuẩn, các đặc trưng cấu trúc MIDI (mật độ nốt, đa âm, tỉ lệ im lặng, tỉ lệ mẫu rỗng, phân bố pitch-class so với tham chiếu, và chỉ số khớp nhạc cụ) của hai nhánh khác nhau ra sao theo quá trình học? Những khác biệt đó có thể truy về đâu trong lựa chọn biểu diễn, hàm mất mát và quy trình giải mã?
+
+    \item[\textbf{RQ3.}]
+    Chi phí thực tế (thời gian epoch, thời gian suy luận xấp xỉ trên mỗi mẫu, số tham số, bộ nhớ GPU ghi nhận được) của hai nhánh chênh lệch thế nào, và sự đánh đổi chi phí--hành vi sinh gợi ý khi nào nên ưu tiên từng hướng trong ràng buộc đồ án trên GPU phổ thông?
+\end{enumerate}
+
+RQ1 bám nhật ký huấn luyện và thiết kế hàm mất mát. RQ2 nối chỉ số với chi tiết điều kiện hóa/giải mã trong mã nguồn --- đặc biệt tránh diễn giải sai chỉ số khớp nhạc cụ. RQ3 bổ sung chiều hệ thống, tránh kết luận chỉ từ một chỉ số chất lượng. Cả ba phục vụ một luận điểm: \textit{so sánh hai họ tạo sinh chỉ có ý nghĩa khi dùng cùng giao thức và hiểu đúng mỗi bên đang học và sinh như thế nào}.
+
+%------------------------------------------------------------------------------
+\section{Phạm vi và giả định}
+\label{sec:ch1-scope}
+
+Để giữ đồ án khả thi và so sánh thống nhất, các ranh giới sau được áp dụng có chủ đích.
+
+\paragraph{Về miền dữ liệu và đầu ra.}
+Hệ thống làm việc trên \textbf{MIDI đã xử lý}, không huấn luyện sinh tín hiệu âm thanh thô hay phổ tần. Kho dữ liệu gộp nhiều nguồn MIDI công khai (trọng tâm là dữ liệu có siêu dữ liệu/gán nhãn phù hợp lược đồ), với quy mô cỡ hàng chục nghìn tệp sau lọc --- đủ cho thực nghiệm đồ án nhưng không tương đương kho dữ liệu công nghiệp. Đầu ra đánh giá chính là MIDI; việc render audio chỉ mang tính phụ trợ.
+
+\paragraph{Về điều kiện hóa.}
+Hai nhánh dùng cùng pipeline \textbf{câu tiếng Anh} $\rightarrow$ MiniLM đóng băng $\rightarrow$ projection (module \texttt{compare/text\_conditioner.py}); mỗi nhánh có bộ trọng số projection và mạng nhạc riêng sau huấn luyện. Sáu thuộc tính rời rạc vẫn dùng để: (i)~sinh caption huấn luyện theo template; (ii)~siêu dữ liệu prompt đánh giá và chỉ số khớp nhạc cụ / gán program phía Diffusion. Backbone ngôn ngữ \textbf{không} được tinh chỉnh end-to-end; encoder nhạc--ngôn ngữ chuyên biệt (CLAP, \ldots) cũng không nằm trong vòng so sánh chính. Hệ quả: miền diễn đạt thực tế gắn với template và khả năng tổng quát của MiniLM; đổi lại, hai nhánh so sánh trên cùng đặc tả text$\rightarrow c$, không lệch schema điều kiện.
+
+\paragraph{Về quy mô mô hình và tài nguyên.}
+Kiến trúc được chọn ở mức \textbf{nhẹ đến trung bình} (cỡ vài triệu đến dưới mười triệu tham số theo cấu hình thực nghiệm), huấn luyện trên GPU phổ thông (trong thực nghiệm ghi nhận là card lớp RTX~3060). Số epoch so sánh chính thức cố định (ba mươi epoch với các điểm kiểm tra mốc), không nhằm đạt trạng thái tối ưu tuyệt đối bằng huấn luyện hàng trăm epoch hay cụm máy lớn.
+
+\paragraph{Về đánh giá.}
+Báo cáo ưu tiên các chỉ số MIDI khách quan và chi phí hệ thống. \textbf{Không} khẳng định thứ hạng cảm nhận nghe nếu chưa có đánh giá nghe có kiểm soát; cũng không sử dụng các chỉ số audio phân phối quy mô lớn (FAD, CLAP, \ldots) như tiêu chí chính trong phạm vi hiện tại. Mọi kết luận mang tính ``chất lượng cấu trúc sự kiện và hành vi học'', không phải xếp hạng bản thu âm theo cảm nhận.
+
+\paragraph{Giả định làm việc.}
+Nhãn điều kiện được coi là tín hiệu giám sát đủ dùng cho học có điều kiện, dù một phần nhãn có thể bắt nguồn từ siêu dữ liệu hoặc heuristic và do đó chứa nhiễu. Phân chia huấn luyện/kiểm định được cố định một lần và dùng chung. Cùng một bộ prompt đánh giá được áp dụng cho mọi điểm kiểm tra cần so sánh. Các giả định này là điều kiện để RQ1--RQ3 có ý nghĩa; nếu vi phạm (ví dụ hai nhánh huấn luyện trên tập khác nhau), toàn bộ bàn luận so sánh sẽ mất giá trị.
+
+%------------------------------------------------------------------------------
+\section{Đóng góp chính}
+\label{sec:ch1-contributions}
+
+Trong khuôn khổ đồ án tốt nghiệp, đóng góp được hiểu là những sản phẩm và nhận thức \textbf{có thể kiểm chứng} trong báo cáo và mã nguồn, chứ không phải tuyên bố vượt qua các hệ thương mại.
+
+Đóng góp thứ nhất là đặc tả bài toán và quy trình dùng chung: nhãn sáu thuộc tính, cầu nối nhãn$\rightarrow$câu English, pipeline \texttt{TextPromptEncoder} (cùng mã nguồn; projection học riêng), kho MIDI đã xử lý, phân chia huấn luyện/kiểm định cố định, và quy ước đầu ra MIDI thống nhất. Nhờ đó, khác biệt quan sát trong thực nghiệm có thể quy về kiến trúc và biểu diễn thay vì lệch dữ liệu hay lệch định dạng điều kiện. Đóng góp thứ hai là hai hệ sinh có điều kiện theo quy trình đầu cuối trong cùng khung so sánh --- Music Transformer trên REMI (cross-attention với $c$ text, entropy chéo, sinh tự hồi quy) và Piano-roll Diffusion trên UNet (FiLM từ $c$, CFG, EMA, DDIM, giải mã roll) --- mỗi nhánh đủ vòng huấn luyện--điểm kiểm tra--sinh mẫu. Đóng góp thứ ba là giao thức đánh giá có thể tái lập: sinh theo 20 câu prompt chuẩn tại các mốc epoch, tính chỉ số cấu trúc, ghi thời gian và thông tin hệ thống vào CSV, cho phép trả lời RQ1--RQ3 bằng bảng số. Đóng góp thứ tư mang tính phương pháp: báo cáo không dừng ở việc hàm mất mát tốt hay kém hơn, mà chỉ ra cách diễn giải đúng chỉ số gắn với quyết định thiết kế --- ví dụ nhạc cụ được \textit{sinh} trong chuỗi token khác nhạc cụ được \textit{gán} khi giải mã piano-roll, hay MSE khử nhiễu thấp chưa bảo đảm mật độ nốt hợp lý sau ngưỡng hóa.
+
+Những gì không nhận là đóng góp: không đề xuất kiến trúc hoàn toàn mới mang tính đột phá; không huấn luyện mô hình audio đa thang lớn; không chứng minh vượt MusicGen/MusicLM hay các hệ đóng. Giá trị của báo cáo nằm ở độ thống nhất của thực nghiệm so sánh, độ trung thực khi nối thiết kế triển khai với số liệu, và các bài học thiết kế có thể chuyển giao cho hướng nghiên cứu hoặc sản phẩm hẹp hơn (BGM MIDI có điều khiển) trong điều kiện tài nguyên hạn chế.
+
+%------------------------------------------------------------------------------
+\section{Cấu trúc báo cáo}
+\label{sec:ch1-structure}
+
+Phần còn lại của báo cáo được tổ chức thành ba chương nội dung chính, cộng phần kết luận.
+
+Chương~\ref{chap:theory} trình bày cơ sở lý thuyết và công trình liên quan: biểu diễn MIDI cho học máy, mô hình tự hồi quy/Transformer trong sinh nhạc, nền tảng diffusion và điều kiện hóa/CFG, cùng bản đồ các nghiên cứu tiêu biểu. Chương này cung cấp ngôn ngữ và khung tiêu chí để đọc phần triển khai, đồng thời xác định chỗ trống mà báo cáo nhắm tới --- so sánh hai họ trên cùng quy trình MIDI có điều kiện ở quy mô khả thi.
+
+Chương về triển khai hệ thống mô tả chi tiết cách hiện thực hai nhánh và mô-đun đánh giá: dữ liệu, kiến trúc, điều kiện hóa, hàm mất mát, huấn luyện, sinh mẫu, cùng bảng đối chiếu thiết kế. Mọi lựa chọn được giải thích theo hướng ``vì sao làm vậy'' và ``hệ quả có thể đo được'', tạo cầu nối trực tiếp sang phân tích thực nghiệm.
+
+Chương về kết quả thực nghiệm và đánh giá trình bày hội tụ hàm mất mát, chỉ số MIDI theo epoch, chi phí tính toán, rồi thảo luận sự đánh đổi và trả lời RQ1--RQ3. Các hạn chế và hướng phát triển được nêu trung thực trên cơ sở những gì đã quan sát được, thay vì danh sách cải tiến chung chung.
+
+Cuối cùng, phần kết luận tổng hợp lại các điểm chính, đối chiếu với mục tiêu ban đầu, và phác thảo hướng mở rộng có ưu tiên. Toàn bộ mạch văn nhằm bảo đảm người đọc luôn thấy mạch xuyên suốt: \textbf{cùng bài toán --- hai thiên kiến quy nạp --- giao thức đồng nhất --- kết luận có điều kiện}.
+
+%------------------------------------------------------------------------------
+\section*{Tóm tắt chương}
+\addcontentsline{toc}{section}{Tóm tắt chương}
+
+Chương này đã đặt bối cảnh ứng dụng và động lực phương pháp cho bài toán sinh MIDI có điều kiện từ mô tả text (kèm lược đồ sáu thuộc tính phía nhãn); phát biểu rõ đặc tả đầu vào--đầu ra hai tầng; giới thiệu hai hướng Music Transformer và Piano-roll Diffusion kèm các trục so sánh và lưu ý không lẫn hàm mất mát hay chỉ số; nêu mục tiêu, ba câu hỏi nghiên cứu đo được, phạm vi giả định, và bốn đóng góp kiểm chứng được. Các chương tiếp theo lần lượt cung cấp nền tảng lý thuyết, hiện thực hóa hệ thống, và đánh giá bằng thực nghiệm trên cùng giao thức.

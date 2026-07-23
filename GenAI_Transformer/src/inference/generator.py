@@ -1,13 +1,10 @@
 """
-Music Generator — structured prompt only → MIDI tokens → MIDI file.
-
-Same INPUT as Diffusion: mood/genre/scene/tempo/instrument/energy (int IDs).
-Same OUTPUT: .mid file.
+Music Generator — English text prompt → MIDI tokens → MIDI file.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Sequence, Union
 
 import torch
 
@@ -28,31 +25,22 @@ class MusicGenerator:
     @torch.no_grad()
     def generate(
         self,
-        mood: int = 3,
-        genre: int = 0,
-        scene: int = 2,
-        tempo: int = 2,
-        instrument: int = 0,
-        energy: int = 2,
+        prompt: Optional[str] = None,
+        prompt_text: Optional[str] = None,
         max_length: int = 2048,
         temperature: float = 0.85,
         top_p: float = 0.9,
         top_k: int = 0,
         **_ignored,
     ) -> List[int]:
-        """Autoregressive MIDI tokens from structured condition (no BERT)."""
+        """Autoregressive MIDI tokens from English text condition."""
+        text = (prompt_text or prompt or "").strip()
+        if not text:
+            text = "peaceful fantasy village music, moderate tempo, piano, medium energy"
+
         generated = [self.tokenizer.bos_id]
         kv_caches = None
-
-        mood_t = torch.tensor([mood], device=self.device)
-        genre_t = torch.tensor([genre], device=self.device)
-        scene_t = torch.tensor([scene], device=self.device)
-        tempo_t = torch.tensor([tempo], device=self.device)
-        inst_t = torch.tensor([instrument], device=self.device)
-        energy_t = torch.tensor([energy], device=self.device)
-        cond = self.model.encode_structured_prompt(
-            mood_t, genre_t, scene_t, tempo_t, inst_t, energy_t
-        )
+        cond = self.model.encode_text([text], as_sequence=True)
 
         for _ in range(max_length - 1):
             input_tensor = torch.tensor(
@@ -81,12 +69,8 @@ class MusicGenerator:
     def generate_midi(
         self,
         output_path: str = "output.mid",
-        mood: int = 3,
-        genre: int = 0,
-        scene: int = 2,
-        tempo: int = 2,
-        instrument: int = 0,
-        energy: int = 2,
+        prompt: Optional[str] = None,
+        prompt_text: Optional[str] = None,
         max_length: int = 2048,
         temperature: float = 0.85,
         top_p: float = 0.9,
@@ -96,12 +80,8 @@ class MusicGenerator:
         import os
 
         tokens = self.generate(
-            mood=mood,
-            genre=genre,
-            scene=scene,
-            tempo=tempo,
-            instrument=instrument,
-            energy=energy,
+            prompt=prompt,
+            prompt_text=prompt_text,
             max_length=max_length,
             temperature=temperature,
             top_p=top_p,

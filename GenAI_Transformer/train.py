@@ -73,6 +73,10 @@ def main():
                         help="Comma-separated epochs to always checkpoint (for comparison)")
     parser.add_argument("--no_early_stop", action="store_true",
                         help="Disable early stopping (useful for epoch 1/5/10 comparison)")
+    parser.add_argument("--amp", action="store_true",
+                        help="Enable AMP fp16 (off by default; unstable on some Vast GPUs)")
+    parser.add_argument("--no_cudnn", action="store_true",
+                        help="Disable cuDNN (slower; last resort if CUDA errors persist)")
     args = parser.parse_args()
 
     # Load config
@@ -97,10 +101,17 @@ def main():
 
     set_seed(seed)
 
+    captions_file = paths_cfg.get("captions_file", "../data/labels/captions.json")
+    captions_file = _resolve(captions_file)
+    if not os.path.exists(captions_file):
+        captions_file = None
+
     print("=" * 60)
-    print("  TEXT-TO-MUSIC: Training")
+    print("  TEXT-TO-MUSIC: Training (English text + MiniLM)")
     print("=" * 60)
     print(f"  Data: {data_dir}")
+    print(f"  Labels: {labels_file}")
+    print(f"  Captions: {captions_file or '(build from labels on the fly)'}")
     print(f"  Epochs: {num_epochs}")
     print(f"  Batch Size: {batch_size}")
     print(f"  LR: {lr}")
@@ -137,10 +148,12 @@ def main():
         batch_size=batch_size,
         val_split=0.1,
         labels_file=lf,
+        captions_file=captions_file,
         max_files=args.max_files,
-        num_workers=args.num_workers,
+        num_workers=args.num_workers,  # default 0 (safe on Windows / Vast CUDA debugging)
         seed=seed,
-        pretokenize="auto",  # auto for small-medium datasets
+        # pretokize off: avoids large RAM spike + odd CUDA crashes on some Vast GPUs
+        pretokenize=False,
     )
 
     if len(dataset) == 0:
@@ -192,6 +205,8 @@ def main():
         save_epochs=save_epochs,
         device=device,
         pad_token_id=tokenizer.pad_id,
+        use_amp=args.amp,
+        disable_cudnn=args.no_cudnn,
     )
 
     # Resume if requested (deep feature)

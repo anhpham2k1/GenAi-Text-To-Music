@@ -1,0 +1,320 @@
+\chapter{Kết quả thực nghiệm và đánh giá}
+\label{chap:experiments}
+
+Chương này đưa ba câu hỏi RQ1--RQ3 ở Chương~\ref{chap:intro} xuống mặt số liệu. Nguồn chính là nhật ký huấn luyện và các chỉ số MIDI trong \texttt{compare/results/}, đọc trong bối cảnh thiết kế mã nguồn đã mô tả ở Chương~\ref{chap:implementation}. Các nhận định dừng ở cấu trúc sự kiện và hành vi học; khi chưa có đánh giá nghe có kiểm soát, báo cáo không suy diễn chất lượng cảm nhận.
+
+%------------------------------------------------------------------------------
+\section{Thiết lập thực nghiệm}
+\label{sec:ch4-setup}
+
+Thực nghiệm so sánh dựng trên cùng kho đã xử lý khoảng \textbf{14\,232} MIDI, với phân chia cố định \textbf{12\,809} huấn luyện / \textbf{1\,423} kiểm định trong \texttt{compare/split.json}. Điều kiện hóa dùng \textbf{cùng} module \texttt{TextPromptEncoder} (câu English $\rightarrow$ MiniLM đóng băng + projection); khi huấn luyện, câu được sinh từ nhãn sáu thuộc tính theo template. Vòng đánh giá sinh lặp lại \textbf{20} câu trong \texttt{eval\_prompts.json} (trường \texttt{text}, kèm meta thuộc tính cho chỉ số) tại các điểm kiểm tra epoch \textbf{1, 5, 10, 20, 30}.
+
+Thông tin thực nghiệm đầy đủ trên phân chia này, trích từ \texttt{model\_summary.csv} và các tệp \texttt{*\_training.csv}, được tóm trong bảng~\ref{tab:ch4-setup}.
+
+\begin{table}[htbp]
+\centering
+\caption{Thông tin thực nghiệm so sánh chính (trích nhật ký)}
+\label{tab:ch4-setup}
+\small
+\begin{tabular}{lcc}
+\toprule
+ & \textbf{Transformer} & \textbf{Diffusion} \\
+\midrule
+Số tham số (triệu) & 7.717 & 4.433 \\
+Thiết bị & CUDA, RTX 3060 & CUDA, RTX 3060 \\
+Mẫu huấn luyện / kiểm định & 12809 / 1423 & 12809 / 1423 \\
+Tích lũy gradient (nhật ký) & 4 & 4 \\
+Kích thước batch (các dòng tóm tắt) & 2--8 & 1--4 \\
+EMA & -- & Có \\
+Số bước khuếch tán (lịch) & -- & 1000 \\
+Số epoch phân tích & 30 (kiểm định ổn định từ ep.\ 2) & 30 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Trước khi đọc đường cong hàm mất mát cần một bước làm sạch nhật ký. Cả \texttt{transformer\_training.csv} lẫn \texttt{diffusion\_training.csv} còn sót các dòng chạy thử trên tập con nhỏ (kiểm định \texttt{nan}, hàm mất mát cao bất thường). Phần hội tụ dưới đây chỉ giữ thực nghiệm chính: với Transformer là các epoch có \texttt{val\_loss} hợp lệ và \texttt{peak\_vram\_mb}${}=302.12$ (chuỗi epoch 2--30, thời gian tích lũy cuối khoảng $4{,}68$ giờ); với Diffusion là chuỗi đầy đủ bắt đầu từ epoch 1 với \texttt{train\_loss}${}\approx 0.032$ và khoảng 3203 bước toàn cục mỗi epoch, kéo đến epoch 30 (tích lũy khoảng $12{,}57$ giờ).
+
+Nguyên tắc xếp hạng cũng cần nêu rõ. Báo cáo không so sánh entropy chéo với MSE để tuyên bố mô hình nào vượt trội. Những gì được đặt cạnh nhau là đường cong hàm mất mát nội tại từng nhánh, chỉ số MIDI trên cùng 20 prompt, và chi phí thời gian, VRAM, số tham số.
+
+%------------------------------------------------------------------------------
+\section{Hội tụ hàm mất mát (RQ1)}
+\label{sec:ch4-loss}
+
+\subsection{Music Transformer}
+
+Bảng~\ref{tab:ch4-tf-loss} trích entropy chéo huấn luyện/kiểm định và độ bối rối tại các mốc của thực nghiệm chính.
+
+\begin{table}[htbp]
+\centering
+\caption{Transformer --- entropy chéo huấn luyện/kiểm định và độ bối rối (thực nghiệm chính)}
+\label{tab:ch4-tf-loss}
+\begin{tabular}{ccccc}
+\toprule
+Epoch & CE huấn luyện & CE kiểm định & PPL & Thời gian epoch (s) \\
+\midrule
+2 & 4.968 & 4.115 & 61.25 & 975.2 \\
+5 & 3.065 & 2.896 & 18.11 & 565.8 \\
+10 & 2.656 & 2.579 & 13.19 & 567.9 \\
+15 & 2.510 & 2.468 & 11.80 & 569.9 \\
+20 & 2.441 & 2.417 & 11.22 & 565.2 \\
+25 & 2.400 & 2.397 & 10.99 & 569.3 \\
+30 & 2.392 & 2.389 & 10.91 & 566.6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Giai đoạn đầu giảm rất rõ: entropy chéo kiểm định từ $4.115$ (epoch 2) xuống $2.896$ (epoch 5), khoảng $29{,}6\%$ tương đối, trong khi độ bối rối giảm từ $61.25$ xuống $18.11$. Sau đó nhịp cải thiện chậm lại. Từ epoch 5 đến 10, kiểm định giảm thêm khoảng $0.317$; từ 10 đến 20 khoảng $0.162$; từ 20 đến 30 chỉ còn khoảng $0.028$ (xấp xỉ $1{,}2\%$ so với mức tại epoch 20). Ở cuối quá trình, huấn luyện và kiểm định xấp xỉ nhau ($2.392$ so với $2.389$), không thấy kiểm định tăng tách biệt theo kiểu overfitting cổ điển. Learning rate trên nhật ký đi theo cosine: cỡ $3{,}8\times 10^{-5}$ ở epoch 2, lên quanh $5\times 10^{-5}$, rồi xuống khoảng $1{,}2\times 10^{-6}$ ở epoch 30.
+
+Nhìn tổng thể phía Transformer, mô hình học được phân phối token có điều kiện một cách ổn định. Sau epoch 20, mức cải thiện biên trên entropy chéo và độ bối rối còn lại khá mỏng.
+
+\subsection{Piano-roll Diffusion}
+
+\begin{table}[htbp]
+\centering
+\caption{Diffusion --- MSE huấn luyện/kiểm định (thực nghiệm chính)}
+\label{tab:ch4-diff-loss}
+\begin{tabular}{cccc}
+\toprule
+Epoch & MSE huấn luyện & MSE kiểm định & Thời gian epoch (s) \\
+\midrule
+1 & 0.032231 & 0.008160 & 1445.6 \\
+5 & 0.006056 & 0.004146 & 1406.8 \\
+10 & 0.005114 & 0.003456 & 1407.2 \\
+15 & 0.004596 & 0.003234 & 1573.7 \\
+20 & 0.004443 & 0.003063 & 1574.9 \\
+25 & 0.004223 & 0.003062 & 1577.1 \\
+30 & 0.004077 & 0.002892 & 1578.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Diffusion hội tụ nhanh trong năm epoch đầu: MSE huấn luyện từ $0.032$ xuống $0.006$. MSE kiểm định tốt nhất trong các mốc bảng là \textbf{0.002892} tại epoch 30. Một điểm dễ gây hiểu nhầm là kiểm định thường thấp hơn huấn luyện. Hiện tượng này xuất hiện với MSE diffusion khi kết hợp EMA và việc lấy mẫu bước nhiễu $t$ ngẫu nhiên; nó \textbf{không} được đọc như bằng chứng ``Diffusion tổng quát hóa tốt hơn Transformer'' theo nghĩa so sánh chéo hai họ. Nhật ký đầy đủ còn vài dao động cục bộ (kiểm định tăng nhẹ quanh epoch 19 rồi hồi phục), nhưng biên độ nhỏ so với xu hướng giảm dài hạn. Learning rate ghi trong CSV giữ \textbf{0.00015} suốt 30 epoch, không giảm dần.
+
+Về RQ1 phía Diffusion, bộ khử nhiễu hội tụ tốt trên hàm mục tiêu MSE. Cùng lúc, RQ1 \textbf{không} cho phép kết luận Diffusion học nhạc tốt hơn Transformer chỉ vì giá trị MSE nhỏ hơn entropy chéo.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.88\textwidth]{fig_loss_by_epoch}
+\caption{Đường cong hàm mất mát theo epoch của hai nhánh (huấn luyện/kiểm định). Lưu ý: entropy chéo và MSE không cùng thang đo, chỉ dùng để theo dõi hội tụ nội tại từng nhánh.}
+\label{fig:ch4-loss-curves}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.75\textwidth]{fig_transformer_perplexity}
+\caption{Độ bối rối kiểm định của Music Transformer theo epoch (thực nghiệm chính).}
+\label{fig:ch4-tf-ppl}
+\end{figure}
+
+%------------------------------------------------------------------------------
+\section{Chất lượng MIDI theo epoch (RQ2)}
+\label{sec:ch4-quality}
+
+Các chỉ số chất lượng lấy từ \texttt{quality\_summary.csv}, trung bình trên 20 tệp ứng với 20 prompt cho mỗi cặp phương pháp$\times$epoch.
+
+\begin{table}[htbp]
+\centering
+\caption{Chỉ số MIDI trung bình (20 prompt) --- Transformer}
+\label{tab:ch4-q-tf}
+\scriptsize
+\begin{tabular}{ccccccc}
+\toprule
+Ep & Số nốt & Mật độ & Đa âm & Im lặng & Khớp NC & Rỗng \\
+\midrule
+1 & 21.2 & 1.57 & 6.92 & 0.190 & 0.150 & 0.00 \\
+5 & 35.9 & 6.15 & 2.84 & 0.401 & 0.176 & 0.15 \\
+10 & 35.4 & 2.79 & 2.72 & 0.475 & 0.211 & 0.05 \\
+20 & 40.9 & 3.66 & 1.87 & 0.371 & 0.278 & 0.10 \\
+30 & 42.4 & 5.56 & 2.01 & 0.337 & 0.368 & 0.05 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Chỉ số MIDI trung bình (20 prompt) --- Diffusion}
+\label{tab:ch4-q-diff}
+\scriptsize
+\begin{tabular}{ccccccc}
+\toprule
+Ep & Số nốt & Mật độ & Đa âm & Im lặng & Khớp NC & Rỗng \\
+\midrule
+1 & 963 & 90.3 & 79.0 & 0.009 & 1.000 & 0.00 \\
+5 & 1309 & 122.7 & 72.0 & 0.009 & 1.000 & 0.00 \\
+10 & 1323 & 124.0 & 61.2 & 0.010 & 1.000 & 0.00 \\
+20 & 1325 & 124.3 & 49.6 & 0.011 & 1.000 & 0.00 \\
+30 & 920 & 86.3 & 42.6 & 0.009 & 1.000 & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Bảng~\ref{tab:ch4-q-ref} bổ sung sai lệch mật độ so với tham chiếu, khoảng cách JS trên pitch-class, và thời gian suy luận trung bình mỗi mẫu.
+
+\begin{table}[htbp]
+\centering
+\caption{Sai lệch so với tham chiếu và JS pitch-class (trung bình)}
+\label{tab:ch4-q-ref}
+\scriptsize
+\begin{tabular}{llccc}
+\toprule
+Phương pháp & Ep & Sai số mật độ & JS pitch-class & Suy luận (s/mẫu) \\
+\midrule
+Transformer & 1 & 3.86 & 0.179 & 3.90 \\
+Transformer & 5 & 6.33 & 0.112 & 5.14 \\
+Transformer & 10 & 4.22 & 0.155 & 4.29 \\
+Transformer & 20 & 3.97 & 0.181 & 4.10 \\
+Transformer & 30 & 4.77 & 0.149 & 4.08 \\
+Diffusion & 1 & 85.4 & 0.074 & 2.49 \\
+Diffusion & 5 & 117.8 & 0.075 & 2.57 \\
+Diffusion & 10 & 119.1 & 0.080 & 2.64 \\
+Diffusion & 20 & 119.5 & 0.080 & 2.49 \\
+Diffusion & 30 & 81.4 & 0.082 & 2.35 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.88\textwidth]{fig_quality_metrics}
+\caption{Một số chỉ số chất lượng MIDI trung bình theo epoch (hai nhánh). Cần đọc kèm lưu ý về \texttt{instrument\_match} ở nhánh Diffusion (Mục~\ref{sec:ch3-diff-decode}).}
+\label{fig:ch4-quality-metrics}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.78\textwidth]{fig_density_polyphony_ep30}
+\caption{Đối chiếu mật độ nốt và đa âm trung bình tại epoch 30.}
+\label{fig:ch4-density-poly-ep30}
+\end{figure}
+
+\subsection{Đọc kết quả phía Transformer}
+
+Trên nhánh Transformer, số nốt trung bình tăng từ khoảng 21 lên 42, trong khi đa âm giảm từ $6.9$ ở epoch 1 về quanh $2$. Xu hướng này gần với cấu trúc thưa, kiểu giai điệu--hòa âm vừa phải, hơn là tập hợp nốt dày đặc. \texttt{instrument\_match} tăng từ \textbf{0.150} lên \textbf{0.368}, phù hợp việc mô hình dần sinh token/program khớp nhóm prompt hơn --- và vì giải mã lấy program từ token, chỉ số này phản ánh hành vi học. Tỉ lệ im lặng vẫn cao ($0.19$--$0.48$) và tỉ lệ mẫu rỗng dao động $0.05$--$0.15$ ở vài mốc, gợi ý sinh thiếu (\textit{under-generation}) hoặc dừng sớm hơn là overfitting theo hướng tăng mật độ nốt quá mức. Pitch-class JS tốt nhất trong các mốc báo cáo rơi vào epoch 5 ($0.112$), không đơn điệu theo entropy chéo kiểm định; nói cách khác, khả năng dự đoán token và độ gần phân bố pitch-class không phải một đường thẳng.
+
+\subsection{Đọc kết quả phía Diffusion}
+
+Diffusion cho kết quả khác biệt rõ. Mật độ nằm trong khoảng 86--124 nốt/giây và đa âm 43--79, lệch rất xa cả Transformer lẫn tham chiếu theo \texttt{note\_density\_abs\_err} (81--119). Tỉ lệ im lặng khoảng $0.009$ nghĩa là trên lưới thời gian gần như luôn có nốt. \texttt{instrument\_match} giữ \textbf{1.0} mọi epoch, kèm \texttt{num\_instruments}${}=1$ trong tóm tắt, khớp chính xác với việc \texttt{generate.py} gán \texttt{PROGRAM\_MAP} theo prompt (Mục~\ref{sec:ch3-diff-decode}). Con số này không được đọc như bằng chứng CFG đã học instrument hoàn hảo. Đa âm giảm từ 79 xuống 43 khi huấn luyện lâu hơn cho thấy việc giảm MSE có ảnh hưởng tới mức kích hoạt dày đặc của roll, nhưng epoch 30 vẫn còn đa âm $42.6$, chưa về vùng thưa. JS pitch-class của Diffusion thấp hơn Transformer ($0.07$--$0.08$) trong khi sai số mật độ vẫn lớn: histogram lớp nốt có thể gần tham chiếu theo tần suất tương đối mà vẫn không phản ánh mật độ hay đa âm hợp lý.
+
+% Gợi ý hình piano-roll mẫu (cùng prompt, TF vs DF) có thể bổ sung sau từ
+% compare/outputs; hiện tại khác biệt mật độ/đa âm đã thể hiện ở
+% Hình~\ref{fig:ch4-density-poly-ep30} và các bảng chỉ số.
+
+\subsection{Tóm tắt RQ2}
+
+Trên cùng 20 prompt, Transformer cho MIDI thưa hơn, đa âm thấp hơn, và instrument\_match cải thiện theo quá trình học. Diffusion cho MIDI rất dày, còn instrument\_match bão hòa vì hậu xử lý. Khoảng cách đó nhất quán với thiên kiến quy nạp REMI kèm entropy chéo so với roll gộp kèm MSE và ngưỡng đã phân tích ở các chương trước; nó không mâu thuẫn với việc cả hai hàm mất mát đều giảm.
+
+%------------------------------------------------------------------------------
+\section{Chi phí tính toán (RQ3)}
+\label{sec:ch4-cost}
+
+\begin{table}[htbp]
+\centering
+\caption{Chi phí xấp xỉ từ nhật ký (thực nghiệm chính)}
+\label{tab:ch4-cost}
+\begin{tabular}{lcc}
+\toprule
+ & Transformer & Diffusion \\
+\midrule
+Số tham số & 7.72\,M & 4.43\,M \\
+Đỉnh VRAM (nhật ký epoch) & $\approx 302$\,MB & $\approx 304$\,MB \\
+Thời gian / epoch (ổn định) & $\approx 566$--570\,s & $\approx 1407$--1578\,s \\
+Tích lũy 30 epoch (nhật ký) & $\approx 4.68$\,h (từ chuỗi ep2--30) & $\approx 12.57$\,h \\
+Suy luận / mẫu (đánh giá) & $\approx 3.9$--5.1\,s & $\approx 2.4$--2.6\,s \\
+Độ dài đoạn mặc định đánh giá & theo chuỗi/EOS (TB $\sim$17--30\,s tùy ep) & $\approx 10.67$\,s cố định \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.78\textwidth]{fig_cumulative_train_time}
+\caption{Thời gian huấn luyện tích lũy theo epoch (hai nhánh, thực nghiệm chính).}
+\label{fig:ch4-cum-time}
+\end{figure}
+
+Diffusion có ít tham số hơn nhưng chậm huấn luyện rõ rệt: mỗi epoch trong nhật ký dài gấp khoảng $2{,}5$--$3$ lần Transformer, phù hợp chi phí UNet hai chiều và nhiều bước nhiễu khi học. Về suy luận, Diffusion nhanh hơn trên mỗi tệp đánh giá, song đoạn mặc định ngắn hơn và chỉ gồm 80 bước DDIM; Transformer chịu chi phí vòng tự hồi quy theo token và độ dài linh hoạt hơn. Đỉnh VRAM trong CSV quanh 300\,MB trông thấp so với quan sát thực dụng khi batch lớn. Đây là giá trị nhật ký đã ghi, có thể phản ánh bộ nhớ đã cấp phát tại thời điểm đo hơn là trần toàn tiến trình; khi tái lập nên đối chiếu \texttt{nvidia-smi} thay vì suy diễn thêm ngoài số liệu.
+
+Trong ràng buộc GPU phổ thông của đồ án, Transformer tiết kiệm hơn về thời gian thực cho 30 epoch đã ghi; Diffusion tốn huấn luyện hơn dù số tham số nhỏ hơn. Suy luận Diffusion cạnh tranh về giây mỗi mẫu trên đoạn khoảng 10 giây. Nếu chỉ nhìn số tham số, sự đánh đổi sẽ bị diễn giải lệch.
+
+%------------------------------------------------------------------------------
+\section{Đối chiếu hai nhánh tại epoch 30}
+\label{sec:ch4-ep30}
+
+Bảng~\ref{tab:ch4-ep30} gom các chỉ số đã trích tại điểm kiểm tra cuối của giao thức so sánh, không phát sinh chỉ số mới ngoài CSV. Nó đóng vai trò tóm tắt tại thời điểm kết thúc huấn luyện; phần diễn giải chi tiết nằm ở các mục trước và Mục~\ref{sec:ch4-discussion}.
+
+\begin{table}[htbp]
+\centering
+\caption{Tóm tắt epoch 30 (số liệu từ nhật ký/tóm tắt chất lượng)}
+\label{tab:ch4-ep30}
+\begin{tabular}{lcc}
+\toprule
+Chỉ số & Transformer & Diffusion \\
+\midrule
+Hàm mất mát huấn luyện & 2.392 (CE) & 0.00408 (MSE) \\
+Hàm mất mát kiểm định & 2.389 (CE) & 0.00289 (MSE) \\
+PPL (kiểm định) & 10.91 & -- \\
+Số nốt (TB) & 42.4 & 920 \\
+Mật độ (TB) & 5.56 & 86.3 \\
+Đa âm (TB) & 2.01 & 42.6 \\
+Im lặng (TB) & 0.337 & 0.009 \\
+Khớp nhạc cụ & 0.368 & 1.000$^{\dagger}$ \\
+Mẫu rỗng (TB) & 0.05 & 0.00 \\
+Sai số mật độ vs tham chiếu & 4.77 & 81.4 \\
+Suy luận (s/mẫu) & 4.08 & 2.35 \\
+Số tham số (M) & 7.717 & 4.433 \\
+\bottomrule
+\multicolumn{3}{l}{\footnotesize $^{\dagger}$ Program gán từ prompt khi giải mã (xem Chương~\ref{chap:implementation}).}
+\end{tabular}
+\end{table}
+
+%------------------------------------------------------------------------------
+\section{Thảo luận tổng hợp và sự đánh đổi}
+\label{sec:ch4-discussion}
+
+\subsection{Hàm mất mát tốt không đồng nghĩa MIDI phù hợp mục tiêu ứng dụng}
+
+Diffusion đạt MSE kiểm định khoảng $0.0029$ nhưng sai số tuyệt đối của mật độ vẫn trên 80. Transformer với entropy chéo kiểm định khoảng $2.39$ và độ bối rối khoảng $10.9$ lại đi kèm mật độ đơn vị và đa âm quanh 2. Khoảng cách đó khẳng định điều đã đặt ở Chương~\ref{chap:theory}: hàm mục tiêu học và chỉ số ứng dụng có thể phân kỳ, nhất là khi còn bước giải mã rời rạc nằm ngoài gradient.
+
+\subsection{Vì sao Transformer cho cấu trúc sự kiện khả dĩ hơn?}
+
+Ba quan sát trong phần triển khai và số liệu cùng chỉ một hướng. REMI buộc mô hình quyết định từng sự kiện nốt; entropy chéo phạt token sai và, nếu dữ liệu thưa, khuyến khích phân phối thưa. Đa âm cùng số nốt trong bảng~\ref{tab:ch4-q-tf} nằm ở thang đoạn nhạc có cấu trúc thưa hơn là phủ kín lưới. Instrument\_match tăng theo epoch cho thấy cross-attention kèm token \texttt{INST\_*} mang tín hiệu học đo được. Điểm yếu đi kèm cũng rõ: tỉ lệ im lặng và mẫu rỗng cho thấy đầu ra đôi khi còn thưa, chưa đủ dày nếu mục tiêu là BGM mật độ cao.
+
+\subsection{Vì sao Diffusion vẫn dày dù đã có CFG, EMA và cosine schedule?}
+
+Đối chiếu mã nguồn cho một chuỗi giải thích hợp lý hơn là gán nguyên nhân đơn lẻ cho ``chưa huấn luyện đủ''. Roll một kênh gộp track, kết hợp gamma làm nổi nốt nhẹ khi mã hóa, tạo mục tiêu vốn đã dễ dày. MSE không có hạng tử thưa hóa. \texttt{pianoroll\_to\_midi} với ngưỡng và cơ chế dự phòng hạ ngưỡng thiên về giữ nốt hơn là cắt bớt. CFG với $s=3.5$ có thể khuếch đại kích hoạt, nhưng CSV hiện tại không có phân tích loại trừ theo $s$, nên báo cáo chỉ ghi nhận cấu hình đã dùng chứ không khẳng định CFG là nguyên nhân duy nhất. Việc đa âm giảm theo epoch chứng minh huấn luyện có tác động; tác động đó chưa đủ để đưa mật độ về gần tham chiếu.
+
+\subsection{Hạn chế diễn giải của chỉ số instrument\_match}
+
+Đây là điểm phản biện then chốt của đồ án. Cùng một tên cột trong CSV, phía Transformer đo việc học sinh token/program, phía Diffusion đo quy trình gán program theo prompt. Mọi bảng xếp hạng mức tuân thủ instrument nếu bỏ chú thích này đều sai về phương pháp, dù con số trông có vẻ thuận lợi.
+
+\subsection{Khi nào nghiêng về từng hướng?}
+
+Trong phạm vi kết quả đã có, Transformer phù hợp hơn khi cần MIDI thưa, đa âm thấp, và muốn theo dõi hoặc điều khiển instrument qua sinh token, với chi phí đi kèm là tỉ lệ im lặng cao hơn và vẫn phụ thuộc EOS. Diffusion ở trạng thái hiện tại hợp lý hơn như đường cơ sở khử nhiễu trên roll và nền để cải thiện giải mã/hàm mất mát; nếu chỉ dựa mật độ và đa âm đã đo, chưa nên xem nó là lựa chọn BGM chính. Vì chưa có thử nghiệm nghe, báo cáo cũng không kết luận bên nào có chất lượng nghe cao hơn.
+
+%------------------------------------------------------------------------------
+\section{Hạn chế của đồ án}
+\label{sec:ch4-limitations}
+
+Một loạt giới hạn cần được nêu trung thực. Đồ án chưa có MOS, thử nghiệm nghe A/B, FAD hay CLAP score. Điều kiện text đã được hỗ trợ, nhưng caption huấn luyện chủ yếu theo template từ sáu nhãn (miền diễn đạt hẹp), MiniLM đóng băng (không fine-tune miền nhạc), và $c$ vẫn chỉ một vector toàn cục. Một phần nhãn có thể đến từ siêu dữ liệu hoặc heuristic nên mang nhiễu. Thời lượng đánh giá không khớp hoàn hảo giữa hai nhánh. Phía Diffusion, program bị gán cố định từ nhãn instrument; quy mô tham số thực nghiệm chính $4.43$\,M cũng khác một số lần thử $13.7$\,M. Phía Transformer, epoch 1 trong \texttt{comparison\_table} từng có kiểm định \texttt{nan} (lần chạy lỗi hoặc ghi đè) và đã bị loại khi phân tích hội tụ. Chưa có đường cơ sở ngoài kho mã nguồn (MIDI ngẫu nhiên, truy xuất theo nhãn, mô hình theo bài báo) và chưa phân tích loại trừ có hệ thống trên hệ số CFG, ngưỡng, làm mượt nhãn, độ dài chuỗi hay chất lượng caption.
+
+%------------------------------------------------------------------------------
+\section{Hướng phát triển}
+\label{sec:ch4-future}
+
+Các hướng dưới đây xuất phát trực tiếp từ hạn chế đã quan sát trong mã nguồn và số liệu, chứ không phải danh sách cải tiến chung chung. Với Diffusion, có thể thêm ràng buộc thưa hóa hoặc biểu diễn onset--frame hai kênh, chỉnh ngưỡng chống mật độ quá cao, và bỏ gán cố định program nếu muốn chỉ số instrument công bằng --- hoặc tách hẳn chỉ số ``program bị gán'' khỏi bảng so sánh. Với Transformer, hàm mất mát phụ cho \texttt{INST\_*}, tinh chỉnh lấy mẫu để giảm mẫu rỗng, và thử điều kiện đa token (chuỗi embedding từ MiniLM thay vì một vector gộp) là các bước gần. Về tầng text, đa dạng hóa template/caption, thử encoder nhạc--ngôn ngữ (CLAP) hoặc partial fine-tune projection sâu hơn, và đánh giá bám prompt ngoài tập câu chuẩn, sẽ làm rõ giới hạn MiniLM đóng băng. Về đánh giá, một thử nghiệm nghe nhỏ có kiểm soát, FAD/CLAP khi render audio thống nhất, và thống kê mật độ tham chiếu từ tập huấn luyện sẽ làm dày phần diễn giải. Về dữ liệu và huấn luyện, lọc piano/game sạch hơn, cân nhãn instrument, thêm lịch learning rate cho Diffusion, và thử lại UNet lớn hơn dưới cùng giải mã nếu VRAM cho phép, đều là mở rộng có căn cứ.
+
+%------------------------------------------------------------------------------
+\section{Trả lời tóm tắt các câu hỏi nghiên cứu}
+\label{sec:ch4-rq-answers}
+
+\textbf{RQ1.} Cả hai nhánh hội tụ ổn định trên hàm mục tiêu riêng: Transformer entropy chéo kiểm định về $2.389$, độ bối rối về $10.91$; Diffusion MSE kiểm định về $0.00289$. Huấn luyện và kiểm định của Transformer bám sát nhau; Diffusion không overfit theo nghĩa kiểm định tăng đột biến. Hai hàm mất mát không được so sánh chéo.
+
+\textbf{RQ2.} Các chỉ số MIDI phân kỳ mạnh. Transformer thưa, đa âm quanh 2, instrument\_match tăng tới khoảng $0.37$. Diffusion dày (mật độ khoảng 86--124), đa âm 43--79, instrument\_match bằng $1.0$ do giải mã. Khác biệt truy về REMI+entropy chéo+token instrument đối lập roll+MSE+ngưỡng+\texttt{PROGRAM\_MAP}.
+
+\textbf{RQ3.} Transformer mất khoảng $4.7$ giờ cho chuỗi 30 epoch đã ghi; Diffusion khoảng $12.6$ giờ. Suy luận Diffusion khoảng $2.4$ giây mỗi mẫu so với khoảng $4$ giây của Transformer, kèm khác biệt độ dài đoạn. Số tham số Diffusion nhỏ hơn nhưng huấn luyện tốn hơn trong thực nghiệm này.
+
+%------------------------------------------------------------------------------
+\section*{Tóm tắt chương}
+\addcontentsline{toc}{section}{Tóm tắt chương}
+
+Chương~\ref{chap:experiments} đã nối thiết lập thực nghiệm với hội tụ hàm mất mát, chỉ số MIDI, chi phí, thảo luận sự đánh đổi, hạn chế và hướng phát triển. Kết luận trung tâm có thể tóm tắt như sau: cả hai mô hình học tốt hàm mất mát của mình, nhưng trên giao thức MIDI hiện tại, nhánh Transformer cho cấu trúc sự kiện khả dĩ hơn, trong khi nhánh Diffusion cần cải thiện biểu diễn và giải mã trước khi có thể so sánh chất lượng BGM một cách công bằng về mật độ và, về lâu dài, về cảm nhận nghe.

@@ -1,0 +1,350 @@
+\chapter{Cơ sở lý thuyết và công trình liên quan}
+\label{chap:theory}
+
+Chương này xây dựng nền tảng để đọc hai hệ thống được triển khai ở Chương~\ref{chap:implementation} và các kết quả ở Chương~\ref{chap:experiments}. Trọng tâm là làm rõ: (i)~bản chất bài toán sinh nhạc có điều kiện; (ii)~hai cách biểu diễn MIDI phổ biến và hệ quả của chúng; (iii)~cơ chế học của mô hình tự hồi quy trên Transformer và của mô hình khuếch tán; (iv)~các kỹ thuật điều kiện hóa và lấy mẫu liên quan trực tiếp tới mã nguồn đồ án; (v)~vị trí của đồ án trên bản đồ nghiên cứu, kèm tiêu chí so sánh hai họ một cách hợp lệ.
+
+%------------------------------------------------------------------------------
+\section{Bài toán sinh nhạc có điều kiện}
+\label{sec:ch2-cond-gen}
+
+Sinh nhạc bằng học máy thuộc lớp \textit{generative modeling}: từ dữ liệu quan sát $\{x^{(i)}\}$ (và khi có điều kiện, các cặp $(x^{(i)}, c^{(i)})$), mô hình học xấp xỉ phân phối $p(x)$ hoặc $p(x\mid c)$, rồi lấy mẫu để tạo $x$ mới. Khác bài toán phân loại, không có nhãn ``đúng/sai'' duy nhất cho mỗi $c$; nhiều bản nhạc khác nhau có thể cùng phù hợp một mô tả. Do đó chất lượng thường được đánh giá đa tiêu chí: tính hợp lệ cấu trúc, độ đa dạng, mức bám điều kiện, và --- nếu có --- cảm nhận nghe.
+
+Khi đầu ra là MIDI, $x$ mang tính \textbf{rời rạc theo sự kiện} (onset, pitch, duration, velocity, program) dù thời gian vật lý là liên tục. Khi đầu ra là audio waveform hoặc spectrogram, $x$ mang tính \textbf{tín hiệu dày}. Hai miền kéo theo kiến trúc và chi phí khác nhau. Các hệ text-to-audio hiện đại (ví dụ các hướng hierarchical token audio hoặc latent diffusion trên phổ) đạt chất lượng nghe cao nhưng đòi hỏi dữ liệu và tài nguyên lớn~\cite{agostinelli2023musiclm,copet2023musicgen,liu2023audioldm}. Trong phạm vi đồ án tốt nghiệp trên GPU phổ thông, việc khoanh bài toán về \textbf{MIDI có điều kiện} là một đánh đổi có chủ đích: giảm độ phức tạp tín hiệu để tập trung so sánh thiên kiến quy nạp của hai họ tạo sinh.
+
+Điều kiện $c$ cũng có nhiều dạng: chuỗi văn bản tự do, biểu diễn nhúng liên kết nhạc--ngôn ngữ, hoặc vector thuộc tính rời rạc. Đồ án kết hợp hai ý: \textbf{nhãn có cấu trúc} (mood, genre, tempo, \ldots) làm nguồn gán nhãn và meta đánh giá; còn $c$ đưa vào mô hình là biểu diễn của \textbf{câu tiếng Anh} qua encoder ngôn ngữ nhẹ đóng băng (MiniLM) kèm projection --- xem chi tiết Chương~\ref{chap:intro} và~\ref{chap:implementation}. Giao diện gần text-to-music hơn nhúng 6 ID thuần, trong khi caption huấn luyện vẫn neo vào từ vựng nhãn (template); hai mô hình nền dùng cùng pipeline mã hóa text (projection học riêng từng nhánh).
+
+%------------------------------------------------------------------------------
+\section{Biểu diễn MIDI cho học máy}
+\label{sec:ch2-midi-repr}
+
+\subsection{Chuỗi sự kiện và REMI}
+
+Một cách tiếp cận cổ điển là biến bản nhạc thành chuỗi sự kiện theo thời gian: note-on, note-off, time-shift, đổi velocity, đổi instrument, \ldots. Họ biểu diễn kiểu này tương thích tự nhiên với mô hình ngôn ngữ: mỗi bước dự đoán một token rời rạc trong vocabulary hữu hạn. Biến thể REMI (\textit{revamped MIDI}) và các lược đồ lân cận tổ chức lại token để phản ánh nhịp, bar hoặc các mốc thời gian thực dụng hơn so với chuỗi thô~\cite{huang2018music} (và các mở rộng tokenizer trong thực hành).
+
+Chuỗi sự kiện có vài ưu điểm thực dụng. Im lặng được mã hóa bằng time-shift thay vì hàng nghìn ô ``tắt'' trên lưới, nên biểu diễn vốn đã thưa. Token instrument/program có thể xuất hiện tường minh trong chuỗi, và các ràng buộc cục bộ như cặp note-on/note-off hay phân bố nhịp có cơ hội được học qua likelihood. Đi kèm theo đó là chi phí đặc trưng của mô hình ngôn ngữ: độ dài chuỗi tăng theo mật độ sự kiện, attention $O(L^2)$ (hoặc xấp xỉ) giới hạn bối cảnh, và lỗi ở bước sinh sớm dễ lan trong giải mã tự hồi quy.
+
+\subsection{Piano-roll}
+
+Piano-roll biểu diễn bản nhạc như ma trận (hoặc tensor) trên trục cao độ và thời gian rời rạc, mỗi ô mang vận tốc hoặc nhị phân onset/frame. Đây là biểu diễn ``giống ảnh'', thuận cho kiến trúc convolution/UNet và cho diffusion trên không gian liên tục sau khi chuẩn hóa. Cấu trúc 2D được khai thác tốt bởi CNN và attention không gian; trong một cửa sổ cố định, sinh có thể diễn ra song song theo thời gian thay vì vòng lặp từng token.
+
+Với MIDI nhiều track, hạn chế cũng lộ rõ. Hàm gộp piano-roll kiểu \texttt{get\_piano\_roll} thường \textbf{chồng mọi track} lên một kênh, làm mất danh tính các lớp âm thanh (giai điệu, bass, hòa âm). Lưới dày với nhiều ô gần 0 khiến giải mã bằng ngưỡng dễ tạo quá nhiều nốt hoặc mất nốt nhẹ. Độ dài đoạn thường bị khóa theo số frame đã chọn lúc huấn luyện.
+
+\subsection{Hệ quả đối với so sánh hai mô hình}
+
+Cùng một tệp MIDI, chuỗi REMI và piano-roll \textbf{không bảo toàn cùng lượng thông tin có cấu trúc}. Do đó, khi đồ án đặt Transformer trên REMI và Diffusion trên roll, phần khác biệt kết quả không chỉ đến từ ``Transformer hay UNet'', mà còn từ \textbf{lựa chọn biểu diễn}. Đây là điểm phương pháp cần nhớ khi đọc Chương~\ref{chap:experiments}: các chỉ số như mật độ nốt hay đa âm phản ánh cả mô hình lẫn quy trình giải mã từ từng dạng biểu diễn.
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.92\textwidth]{he-qua}
+    \caption{Hệ quả phương pháp: cùng dữ liệu, cùng pipeline text và đầu ra MIDI,
+    nhưng khác biểu diễn/hàm mất mát --- chỉ so KPI trên MIDI và chi phí, không xếp hạng bằng CE hay MSE.}
+    \label{fig:ch2-he-qua}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.92\textwidth]{fig_ch2_remi_vs_pianoroll}
+    \caption{Cùng một tệp MIDI được mã hóa theo hai biểu diễn: chuỗi sự kiện REMI
+    (nhánh Transformer) và lưới piano-roll một kênh (nhánh Diffusion).}
+    \label{fig:ch2-remi-vs-roll}
+\end{figure}
+
+%------------------------------------------------------------------------------
+\section{Mô hình tự hồi quy và Transformer trong sinh nhạc}
+\label{sec:ch2-ar-transformer}
+
+\subsection{Nguyên lý tự hồi quy}
+
+Mô hình tự hồi quy (\textit{autoregressive}, AR) phân rã phân phối liên hợp theo xích quy tắc:
+
+\begin{equation}
+\label{eq:ar-factor}
+p(y_{1:T}\mid c)
+= \prod_{t=1}^{T}
+p\!\left(y_t \mid y_{<t},\, c\right).
+\end{equation}
+
+Huấn luyện thường dùng teacher forcing: đưa $y_{<t}$ đúng từ dữ liệu, tối đa hóa log-likelihood (tương đương cực tiểu entropy chéo). Độ bối rối (\textit{perplexity}) $\exp(\mathcal{L})$ là thước đo khả năng dự đoán trung bình; độ bối rối giảm nghĩa là mô hình gán xác suất cao hơn cho token đúng trên tập đánh giá, nhưng không đồng nhất với chất lượng cảm nhận nghe.
+
+\subsection{Transformer decoder}
+
+Kiến trúc Transformer~\cite{vaswani2017attention} dùng self-attention để mô hình hóa phụ thuộc xa tốt hơn RNN, và huấn luyện song song theo chiều thời gian (với mask nhân quả khi là decoder ngôn ngữ). Với sinh nhạc, decoder-only (hoặc encoder--decoder) trên token MIDI đã được chứng minh trong các công trình như Music Transformer~\cite{huang2018music}, nhấn mạnh \textit{relative attention} để nắm các mẫu lặp theo khoảng cách tương đối --- phù hợp motif và nhịp.
+
+Trong thực hành hiện đại, nhiều biến thể thay absolute position bằng RoPE, dùng GQA để giảm KV-cache, chuẩn hóa Q/K, và FFN kiểu SwiGLU. Các kỹ thuật này không đổi bản chất~\eqref{eq:ar-factor} nhưng cải thiện ổn định và chi phí suy luận --- đúng hướng các khối attention/layer trong nhánh Transformer của đồ án (chi tiết triển khai ở Chương~\ref{chap:implementation}).
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.55\textwidth]{Transformer_decoder}
+    \caption{Ngăn xếp decoder của Music Transformer: embedding + RoPE, $N{=}6$
+    DecoderBlock (self-attention nhân quả, cross-attention với $c$ text, FFN),
+    đầu ra logits vocabulary.}
+    \label{fig:ch2-transformer-decoder}
+\end{figure}
+
+\subsection{Điều kiện hóa trong Transformer}
+
+Có nhiều cách đưa $c$ vào mô hình AR: nối prefix token, điều chế theo đặc trưng, hoặc \textbf{cross-attention} (query từ ẩn music, key/value từ biểu diễn điều kiện). Cross-attention cho phép mỗi vị trí chuỗi tham chiếu điều kiện ở mọi lớp, phù hợp khi $c$ là biểu diễn nhúng toàn cục hoặc chuỗi ngắn. Nếu $c$ chỉ gồm \textbf{một} vector (một ``token'' điều kiện), mô hình nhận thiên lệch điều kiện toàn cục lặp lại; khả năng nhấn mạnh từng thuộc tính (ví dụ chỉ instrument) bị hạn chế trừ khi tách điều kiện nhiều token hoặc bổ sung hàm mất mát phụ.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{dieu_Kien_hoa}
+    \caption{Điều kiện hóa text trong Transformer: câu English $\rightarrow$ MiniLM
+    đóng băng + projection $\rightarrow$ vector $c$ làm Key/Value cho cross-attention
+    (không còn nhúng sáu ID).}
+    \label{fig:ch2-conditioning}
+\end{figure}
+
+\subsection{Lấy mẫu chuỗi}
+
+Tại suy luận, $y_t$ được lấy từ $p_\theta(\cdot\mid y_{<t},c)$ sau khi phân phối đã được làm sắc hoặc phẳng. Temperature $\tau$ chia logits: $\tau<1$ thiên về lựa chọn tham lam, $\tau>1$ tăng đa dạng. Top-$k$ chỉ giữ $k$ token xác suất cao nhất, trong khi nucleus sampling (top-$p$)~\cite{holtzman2020curious} giữ tập token nhỏ nhất có khối lượng xác suất không nhỏ hơn $p$. Với âm nhạc, kết hợp $\tau$ vừa phải và top-$p$ thường được ưa chuộng vì hạn chế token nhiễu ở đuôi phân phối mà vẫn không cứng nhắc như giải mã tham lam (\textit{greedy}). Điểm yếu cố hữu của AR vẫn là dừng sớm (\texttt{EOS}), lặp mẫu, hoặc lệch dần khỏi điều kiện khi chuỗi dài.
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.55\textwidth]{lay_mau_chuoi}
+    \caption{Lấy mẫu tự hồi quy tại suy luận: temperature + top-$p$, dừng khi
+    \texttt{EOS}/độ dài tối đa, giải mã REMI $\rightarrow$ MIDI
+    (mặc định $\tau{\approx}0{,}85$, top-$p{\approx}0{,}9$).}
+    \label{fig:ch2-ar-sampling}
+\end{figure}
+
+%------------------------------------------------------------------------------
+\section{Mô hình khuếch tán}
+\label{sec:ch2-diffusion}
+
+\subsection{Quy trình xuôi và ngược}
+
+Mô hình khuếch tán khử nhiễu (\textit{denoising diffusion})~\cite{ho2020ddpm} định nghĩa quá trình Markov xuôi dần thêm nhiễu Gaussian vào dữ liệu $x_0$ cho tới gần $\mathcal{N}(0,I)$. Với lịch $\beta_t$ (hoặc tương đương $\alpha_t=1-\beta_t$, $\bar\alpha_t=\prod_{s=1}^t\alpha_s$), có dạng đóng:
+
+\begin{equation}
+\label{eq:ddpm-forward}
+q(x_t\mid x_0)
+= \mathcal{N}\!\left(
+x_t;\,
+\sqrt{\bar\alpha_t}\, x_0,\,
+(1-\bar\alpha_t)I
+\right).
+\end{equation}
+
+Mạng $\epsilon_\theta$ học dự đoán nhiễu $\epsilon$ đã trộn vào $x_t$ (hoặc học $x_0$/score tương đương). Hàm mất mát đơn giản phổ biến:
+
+\begin{equation}
+\label{eq:ddpm-loss}
+\mathcal{L}_{\mathrm{simple}}
+= \mathbb{E}_{x_0,t,\epsilon}
+\big\|
+\epsilon - \epsilon_\theta(x_t, t)
+\big\|_2^2.
+\end{equation}
+
+Lịch \textbf{cosine} cho $\bar\alpha_t$~\cite{nichol2021improved} thường mượt hơn lịch linear ở nhiều tác vụ sinh, và được dùng trong cấu hình diffusion của đồ án.
+
+\subsection{DDIM}
+
+Denoising Diffusion Implicit Models~\cite{song2021ddim} cho phép lấy mẫu với ít bước hơn DDPM gốc, với tham số $\eta$ điều khiển mức ngẫu nhiên; $\eta=0$ cho quỹ đạo xác định. Điều này quan trọng khi UNet tốn kém về tính toán: thực nghiệm đồ án dùng hàng chục bước DDIM (cỡ 80) thay vì đủ 1000 bước đầy đủ mỗi lần sinh.
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{ddim}
+    \caption{Huấn luyện theo lịch DDPM ($T{=}1000$, cosine) và lấy mẫu DDIM
+    (khoảng 80 bước, $\eta{=}0$) trên cùng UNet, kèm CFG khi generate.}
+    \label{fig:ch2-ddim}
+\end{figure}
+
+\subsection{Điều kiện hóa và classifier-free guidance}
+
+Với $c$ cho trước, mô hình học $\epsilon_\theta(x_t,t,c)$. \textbf{Classifier-free guidance} (CFG)~\cite{ho2022cfg} huấn luyện xen kẽ (hoặc ngẫu nhiên loại bỏ) điều kiện rỗng $\emptyset$, rồi khi lấy mẫu:
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.72\textwidth]{classifierfree_guidance}
+    \caption{Classifier-free guidance: kết hợp dự đoán có/không điều kiện text
+    với hệ số $s{\approx}3{,}5$ (điều kiện rỗng là vector $\mathbf{0}$).}
+    \label{fig:ch2-cfg}
+\end{figure}
+
+\begin{equation}
+\label{eq:cfg-theory}
+\tilde\epsilon
+= \epsilon_\theta(x_t,t,\emptyset)
++ s\cdot\bigl(
+\epsilon_\theta(x_t,t,c)
+-
+\epsilon_\theta(x_t,t,\emptyset)
+\bigr).
+\end{equation}
+
+Hệ số $s>1$ tăng độ bám $c$, nhưng có thể làm mẫu cứng nhắc hoặc làm tăng biên độ kích hoạt --- trên piano-roll có thể ảnh hưởng mật độ kích hoạt sau giải mã. FiLM/feature-wise modulation là một cách tiết kiệm để đưa $c$ (và biểu diễn nhúng thời gian $t$) vào ResBlock CNN, thay cho cross-attention dày trên mọi vị trí không gian.
+
+\subsection{EMA}
+
+Trung bình trượt tham số (\textit{exponential moving average}) thường dùng khi lấy mẫu diffusion để ổn định. Đồ án áp EMA cho UNet và prompt encoder khi kiểm định/sinh --- chi tiết ở Chương~\ref{chap:implementation}.
+
+\subsection{Giới hạn khi áp dụng cho piano-roll MIDI}
+
+Hàm mất mát~\eqref{eq:ddpm-loss} tối ưu khử nhiễu trên không gian liên tục đã chọn. Nó \textbf{không} trực tiếp tối ưu số nốt, tính thưa, hay đúng chương trình nhạc cụ MIDI. Mọi ánh xạ roll $\rightarrow$ MIDI (ngưỡng, thời lượng tối thiểu, gán program) nằm ngoài gradient. Do đó MSE kiểm định thấp là điều kiện cần cho bộ khử nhiễu tốt, chưa đủ để kết luận BGM đạt chất lượng nghe mong muốn hay mật độ hợp lý --- luận điểm sẽ được kiểm chứng bằng các chỉ số MIDI ở Chương~\ref{chap:experiments}.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.92\textwidth]{gioihanpiano-roll-MIDI}
+    \caption{Hạn chế piano-roll một kênh trong đồ án: mất micro-timing, gộp track,
+    lưới dày tốn FLOPs, và giải mã ngưỡng có thể lệch onset --- cần metric MIDI
+    ngoài MSE train; program nhạc cụ gán sau sinh.}
+    \label{fig:ch2-pianoroll-limits}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{fig_ch2_diffusion_process}
+    \caption{Quy trình diffusion có điều kiện trên piano-roll: thêm nhiễu từ $x_0$,
+    UNet dự đoán $\epsilon$ với $c$ (MiniLM+proj) qua FiLM, lấy mẫu DDIM + CFG,
+    rồi giải mã sang MIDI.}
+    \label{fig:ch2-diffusion-process}
+\end{figure}
+
+
+%------------------------------------------------------------------------------
+\section{Công trình liên quan}
+\label{sec:ch2-related}
+
+\subsection{Sinh MIDI bằng mô hình chuỗi}
+
+Music Transformer~\cite{huang2018music} cho thấy self-attention (đặc biệt relative) sinh được cấu trúc dài hạn trên piano MIDI. Các hệ lớn hơn theo hướng GPT/Sparse Transformer (ví dụ các mô tả công khai quanh MuseNet) mở rộng đa nhạc cụ và phong cách, nhưng quy mô và chi tiết toàn hệ thống thường vượt khuôn khổ project. Điểm chung: AR kết hợp token sự kiện là đường cơ sở vững cho MIDI.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{sinhMiDIbangongtrinhchuoi}
+    \caption{Dòng nghiên cứu sinh MIDI bằng mô hình ngôn ngữ / Transformer trên
+    token sự kiện; nhánh đồ án là \texttt{GenAI\_Transformer} có điều kiện text (MiniLM).}
+    \label{fig:ch2-related-midi-seq}
+\end{figure}
+
+\subsection{Sinh audio từ văn bản}
+
+MusicLM~\cite{agostinelli2023musiclm} kết hợp embedding nhạc--ngôn ngữ và sinh token audio đa cấp. MusicGen~\cite{copet2023musicgen} đơn giản hóa còn single-stage language model trên token audio nén. Các hệ này đặt chuẩn chất lượng nghe và text free-form, đồng thời cho thấy chi phí dữ liệu/tính toán rất cao. Project \textbf{không} tái hiện các hệ này; chúng là mốc tham chiếu về khả năng text-to-music audio ở quy mô lớn.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.92\textwidth]{audio-tu-van-ban}
+    \caption{Các hệ text-to-audio quy mô lớn (MusicLM, MusicGen, AudioLDM, \ldots)
+    nằm ngoài phạm vi đồ án; báo cáo chỉ dùng làm mốc tham chiếu về chất lượng/scale.}
+    \label{fig:ch2-related-text-audio}
+\end{figure}
+
+\subsection{Diffusion cho âm thanh và biểu diễn 2D}
+
+AudioLDM và các biến thể latent diffusion trên mel-spectrogram~\cite{liu2023audioldm} minh họa sức mạnh diffusion khi có autoencoder và điều kiện hóa mạnh. Trên MIDI, diffusion trực tiếp trên piano-roll là đơn giản hóa mang tính giáo dục/so sánh: không VAE latent, không CLAP, dễ triển khai nhưng chịu hạn chế biểu diễn gộp track đã bàn.
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.92\textwidth]{diffusion-2d}
+    \caption{Hai nhánh diffusion 2D: spectrogram/latent audio (tham chiếu) so với
+    piano-roll $\rightarrow$ MIDI của nhánh \texttt{GenAI\_Diffusion} (không VAE/CLAP).}
+    \label{fig:ch2-related-diff2d}
+\end{figure}
+
+\subsection{Dữ liệu có thuộc tính cho nhạc}
+
+ComMU~\cite{commu2023} cung cấp MIDI kèm siêu dữ liệu có cấu trúc (thể loại, mood, \ldots), phù hợp học có điều kiện theo thuộc tính --- lý do ComMU chiếm tỉ trọng lớn trong kho gộp của đồ án. Các kho piano lớn như MAESTRO~\cite{hawthorne2018maestro} giàu chất lượng biểu diễn nhưng thiên solo piano và không luôn có nhãn game/mood đồng nhất.
+
+\subsection{Vị trí báo cáo}
+
+Bảng~\ref{tab:ch2-position} tóm tắt chỗ đứng phương pháp.
+
+\begin{table}[htbp]
+\centering
+\caption{Đặt báo cáo trong bối cảnh nghiên cứu (mang tính định tính)}
+\label{tab:ch2-position}
+\small
+\begin{tabular}{p{3.4cm}p{4.8cm}p{5.0cm}}
+\toprule
+\textbf{Hướng} & \textbf{Đặc trưng} & \textbf{Khác báo cáo này} \\
+\midrule
+Music Transformer gốc &
+AR + relative attn, MIDI piano &
+Thêm điều kiện text (MiniLM); so với diffusion; kỹ thuật thực dụng (GQA/RoPE) \\
+\midrule
+MusicLM / MusicGen &
+Text $\rightarrow$ audio, scale lớn &
+Báo cáo: MIDI, text nhẹ (MiniLM freeze), một GPU, so hai mô hình nền \\
+\midrule
+Audio LDM-style &
+Latent diffusion audio &
+Báo cáo: diffusion trên piano-roll trực tiếp, MiniLM chứ không CLAP/VAE \\
+\midrule
+Báo cáo này &
+Cùng data + split + text encoder; REMI vs roll; chỉ số MIDI + chi phí &
+Không khẳng định chất lượng nghe tiên tiến nhất; nhấn giao thức và diễn giải đúng chỉ số \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%------------------------------------------------------------------------------
+\section{Tiêu chí so sánh hợp lệ giữa hai họ}
+\label{sec:ch2-compare-criteria}
+
+Từ các mục trên có thể rút vài nguyên tắc sẽ chi phối Chương~\ref{chap:implementation}--\ref{chap:experiments}. Trước hết, không so sánh trực tiếp entropy chéo và MSE vì khác không gian và đơn vị. Giao thức phải đồng nhất: cùng tệp MIDI huấn luyện/kiểm định, cùng lược đồ $c$, cùng prompt đánh giá, cùng họ chỉ số trên MIDI sinh. Khi đọc mật độ hay đa âm, cần tách phần đến từ biểu diễn và giải mã khỏi phần đến từ số layer hay optimizer. Chỉ số khớp instrument chỉ có nghĩa khi program thực sự do mô hình quyết định; nếu program bị gán cố định sau sinh, chỉ số không còn đo điều kiện hóa. Thời gian huấn luyện/suy luận cùng dung lượng tham số/VRAM là một phần của quyết định kỹ thuật, không phải phụ lục. Cuối cùng, nếu chưa có MOS hay thử nghiệm nghe, kết luận phải dừng ở cấu trúc sự kiện và hành vi học.
+
+Các nguyên tắc này tạo cầu nối sang chương triển khai, nơi hai thiên kiến quy nạp được hiện thực hóa thành mã nguồn cụ thể.
+
+%------------------------------------------------------------------------------
+\section{Đánh giá sinh nhạc: từ likelihood đến chỉ số cấu trúc}
+\label{sec:ch2-eval-theory}
+
+Việc chọn thước đo quyết định cách diễn giải ``mô hình nào tốt hơn''. Có thể phân lớp thô như sau.
+
+\paragraph{Likelihood / reconstruction.}
+Entropy chéo và độ bối rối đo khả năng nén/dự đoán token; MSE diffusion đo sai số nhiễu. Chúng hữu ích để theo dõi hội tụ và so các lần chạy \textit{cùng} hàm mục tiêu, nhưng \textbf{không} chuyển đổi được giữa hai họ.
+
+\paragraph{Chỉ số cấu trúc trên MIDI.}
+Các đại lượng như mật độ nốt (số nốt trên một đơn vị thời gian), đa âm trung bình, tỉ lệ im lặng, entropy cao độ, khoảng cách histogram pitch-class tới tập tham chiếu cho phép so sánh tệp sinh mà không cần nghe. Ưu điểm: tự động, tái lập. Nhược: không nắm đường nét giai điệu dài hạn, cảm xúc chủ quan, hay mức phù hợp scene theo người nghe.
+
+\paragraph{Chỉ số bám điều kiện.}
+Đo xem đầu ra có phản ánh $c$ không. Ví dụ khớp nhóm nhạc cụ giữa prompt và program trội trong tệp. Chỉ số này chỉ hợp lệ khi program (hoặc proxy) thực sự phụ thuộc mô hình; nếu quy trình gán program từ nhãn sau khi sinh, điểm số không còn là thước đo tạo sinh.
+
+\paragraph{Đánh giá người và chỉ số audio.}
+MOS, thử nghiệm ưa thích, FAD, CLAP score gần chất lượng cảm nhận hơn nhưng tốn kém và, với MIDI, còn phụ thuộc synthesizer. Đồ án ghi nhận các hướng này như chuẩn mực cộng đồng, đồng thời khoanh phạm vi vào chỉ số cấu trúc kết hợp chi phí --- nhất quán với tài nguyên và mục tiêu phương pháp luận.
+
+%------------------------------------------------------------------------------
+\section{Kỳ vọng hành vi trước khi thực nghiệm}
+\label{sec:ch2-bias-summary}
+
+Trước khi chuyển sang mã nguồn, bảng~\ref{tab:ch2-bias} tóm tắt kỳ vọng hành vi suy ra từ lý thuyết --- các kỳ vọng này sẽ được \textbf{kiểm chứng hoặc bác bỏ một phần} bằng số liệu ở Chương~\ref{chap:experiments}.
+
+\begin{table}[htbp]
+\centering
+\caption{Thiên kiến quy nạp và hệ quả kỳ vọng}
+\label{tab:ch2-bias}
+\small
+\begin{tabular}{p{3.2cm}p{5.4cm}p{5.4cm}}
+\toprule
+\textbf{Yếu tố} & \textbf{AR + REMI} & \textbf{Diffusion + roll} \\
+\midrule
+Không gian quyết định &
+Rời rạc, từng sự kiện &
+Liên tục, từng ô lưới \\
+\midrule
+Im lặng &
+Time-shift / không note &
+Ô gần giá trị ``tắt''; dễ lệch nếu giải mã yếu \\
+\midrule
+Đa âm &
+Phụ thuộc số NOTE\_ON chồng thời gian &
+Phụ thuộc bao nhiêu pitch vượt ngưỡng cùng frame \\
+\midrule
+Instrument &
+Token trong chuỗi &
+Dễ mất nếu roll gộp; hoặc gán ngoài model \\
+\midrule
+Lỗi suy luận &
+Tích lũy theo bước; EOS sớm &
+Lệch toàn cục trên roll; nhạy threshold \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%------------------------------------------------------------------------------
+\section*{Tóm tắt chương}
+\addcontentsline{toc}{section}{Tóm tắt chương}
+
+Chương~\ref{chap:theory} đã làm rõ bài toán sinh nhạc có điều kiện, đối lập biểu diễn chuỗi sự kiện và piano-roll, trình bày nền AR/Transformer kèm lấy mẫu, nền diffusion/DDIM/CFG, và khảo sát công trình liên quan để định vị đồ án như một nghiên cứu so sánh ở quy mô đồ án tốt nghiệp trên MIDI có điều kiện text (kèm nhãn cấu trúc). Chương tiếp theo mô tả chi tiết cách hai hướng được triển khai trên cùng đặc tả bài toán, đặc biệt pipeline mã hóa câu tiếng Anh (MiniLM đóng băng + projection).

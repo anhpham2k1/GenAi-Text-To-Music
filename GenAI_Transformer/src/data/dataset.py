@@ -17,29 +17,12 @@ from torch.utils.data import Dataset
 
 from .tokenizer import MidiTokenizer
 
-# Shared with Diffusion (compare.prompt_schema) — keep local copies for GenAI_Transformer-only runs
-MOOD_MAP = {
-    "happy": 0, "sad": 1, "tense": 2, "peaceful": 3, "epic": 4,
-    "mysterious": 5, "dark": 6, "heroic": 7, "nostalgic": 8, "playful": 9,
-}
-GENRE_MAP = {
-    "fantasy": 0, "sci-fi": 1, "horror": 2, "adventure": 3, "rpg": 4,
-    "puzzle": 5, "platformer": 6, "simulation": 7, "fighting": 8, "racing": 9,
-}
-SCENE_MAP = {
-    "forest": 0, "dungeon": 1, "village": 2, "castle": 3, "ocean": 4,
-    "space": 5, "mountain": 6, "desert": 7, "city": 8, "battlefield": 9,
-}
-TEMPO_MAP = {
-    "very_slow": 0, "slow": 1, "moderate": 2, "fast": 3, "very_fast": 4,
-}
-INSTRUMENT_MAP = {
-    "piano": 0, "strings": 1, "brass": 2, "flute": 3,
-    "guitar": 4, "organ": 5, "synth": 6, "full_orchestra": 7,
-}
-ENERGY_MAP = {
-    "calm": 0, "low": 1, "medium": 2, "high": 3, "intense": 4,
-}
+# Caption builder (shared)
+import sys as _sys
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
+from compare.caption import labels_to_english_caption  # noqa: E402
 
 
 class MidiDataset(Dataset):
@@ -48,7 +31,7 @@ class MidiDataset(Dataset):
 
     Mỗi sample gồm:
     - tokens: (max_seq_len,) — MIDI token IDs
-    - prompt: dict of int IDs — {mood, genre, scene, tempo, instrument, energy}
+    - prompt_text: English caption string (for MiniLM conditioning)
     """
 
     def __init__(
@@ -57,6 +40,7 @@ class MidiDataset(Dataset):
         tokenizer: MidiTokenizer,
         max_seq_len: int = 2048,
         labels_file: Optional[str] = None,
+        captions_file: Optional[str] = None,
         auto_label: bool = True,
         max_files: Optional[int] = None,
         pretokenize: bool = "auto",
@@ -67,6 +51,7 @@ class MidiDataset(Dataset):
             tokenizer: MidiTokenizer instance
             max_seq_len: Chiều dài tối đa sequence
             labels_file: JSON file chứa labels cho từng MIDI
+            captions_file: optional JSON {filename: english_caption}
             auto_label: Tự động gán labels nếu không có labels_file
             max_files: Giới hạn số file (None = tất cả)
             pretokenize: Whether to pre-tokenize all files on init.
@@ -87,8 +72,14 @@ class MidiDataset(Dataset):
             with open(labels_file, "r", encoding="utf-8") as f:
                 self.labels = json.load(f)
 
+        self.captions: Dict[str, str] = {}
+        if captions_file and os.path.exists(captions_file):
+            with open(captions_file, "r", encoding="utf-8") as f:
+                self.captions = json.load(f)
+            print(f"[MidiDataset] Loaded {len(self.captions)} captions from {captions_file}")
+
         # Cache tokenized data
-        self._cache: Dict[int, Tuple[List[int], Dict[str, int], str]] = {}
+        self._cache: Dict[int, Tuple[List[int], str]] = {}
 
         print(f"[MidiDataset] Found {len(self.midi_files)} MIDI files in {midi_dir}")
 
@@ -115,7 +106,33 @@ class MidiDataset(Dataset):
         if max_files is not None:
             midi_files = midi_files[:max_files]
 
+        # Drop paths listed in cache of known-bad MIDI (built during training)
+        midi_files = self._exclude_cached_bad(midi_files)
         return midi_files
+
+    def _exclude_cached_bad(self, midi_files: List[str]) -> List[str]:
+        if not midi_files:
+            return midi_files
+        root = os.path.dirname(midi_files[0])
+        cache_path = os.path.join(root, ".bad_midi_cache.txt")
+        if not os.path.exists(cache_path):
+            return midi_files
+        with open(cache_path, "r", encoding="utf-8") as f:
+            bad = {line.strip() for line in f if line.strip()}
+        if not bad:
+            return midi_files
+        kept = [p for p in midi_files if p not in bad]
+        print(f"[MidiDataset] Excluded {len(midi_files) - len(kept)} known-bad MIDI from cache")
+        return kept
+
+    def _mark_bad_midi(self, path: str):
+        root = os.path.dirname(path)
+        cache_path = os.path.join(root, ".bad_midi_cache.txt")
+        try:
+            with open(cache_path, "a", encoding="utf-8") as f:
+                f.write(path + "\n")
+        except Exception:
+            pass
 
     def __len__(self) -> int:
         return len(self.midi_files)
@@ -125,16 +142,11 @@ class MidiDataset(Dataset):
         Returns:
             dict with:
                 - tokens: LongTensor (max_seq_len,)
-                - mood: LongTensor scalar
-                - genre: LongTensor scalar
-                - scene: LongTensor scalar
-                - tempo: LongTensor scalar
-                - instrument: LongTensor scalar
-                - energy: LongTensor scalar
+                - prompt_text: English caption (str)
         """
         # Check cache
         if idx in self._cache:
-            token_ids, prompt_ids, prompt_text = self._cache[idx]
+            token_ids, prompt_text = self._cache[idx]
         else:
             midi_path = self.midi_files[idx]
 
@@ -143,7 +155,14 @@ class MidiDataset(Dataset):
                 token_ids = self.tokenizer.encode(midi_path, self.max_seq_len)
             except Exception as e:
                 # Fallback: return padded empty sequence
-                print(f"[WARNING] Failed to tokenize {midi_path}: {e}")
+                if not hasattr(self, "_tok_warn_count"):
+                    self._tok_warn_count = 0
+                self._tok_warn_count += 1
+                if self._tok_warn_count <= 5:
+                    print(f"[WARNING] Failed to tokenize {os.path.basename(midi_path)}: {e}")
+                elif self._tok_warn_count == 6:
+                    print("[WARNING] Further tokenize failures suppressed...")
+                self._mark_bad_midi(midi_path)
                 token_ids = [self.tokenizer.bos_id, self.tokenizer.eos_id]
                 token_ids += [self.tokenizer.pad_id] * (self.max_seq_len - len(token_ids))
                 token_ids = token_ids[: self.max_seq_len]
@@ -153,53 +172,29 @@ class MidiDataset(Dataset):
                 token_ids = [self.tokenizer.bos_id, self.tokenizer.eos_id] + [self.tokenizer.pad_id] * (self.max_seq_len - 2)
                 token_ids = token_ids[: self.max_seq_len]
 
-            # Get labels
+            # Get labels → English caption
             filename = os.path.basename(midi_path)
-            if filename in self.labels:
-                raw_labels = self.labels[filename]
-            elif self.auto_label:
-                try:
-                    raw_labels = self.tokenizer.auto_label(midi_path)
-                except Exception:
-                    raw_labels = self.tokenizer._default_labels()
+            if filename in self.captions and str(self.captions[filename]).strip():
+                prompt_text = str(self.captions[filename]).strip()
             else:
-                raw_labels = self.tokenizer._default_labels()
-
-            prompt_ids = self._labels_to_ids(raw_labels)
-            prompt_text = self._labels_to_prompt_text(raw_labels)
+                if filename in self.labels:
+                    raw_labels = self.labels[filename]
+                elif self.auto_label:
+                    try:
+                        raw_labels = self.tokenizer.auto_label(midi_path)
+                    except Exception:
+                        raw_labels = self.tokenizer._default_labels()
+                else:
+                    raw_labels = self.tokenizer._default_labels()
+                prompt_text = labels_to_english_caption(raw_labels)
 
             # Cache
-            self._cache[idx] = (token_ids, prompt_ids, prompt_text)
+            self._cache[idx] = (token_ids, prompt_text)
 
         return {
             "tokens": torch.tensor(token_ids, dtype=torch.long),
-            "mood": torch.tensor(prompt_ids["mood"], dtype=torch.long),
-            "genre": torch.tensor(prompt_ids["genre"], dtype=torch.long),
-            "scene": torch.tensor(prompt_ids["scene"], dtype=torch.long),
-            "tempo": torch.tensor(prompt_ids["tempo"], dtype=torch.long),
-            "instrument": torch.tensor(prompt_ids["instrument"], dtype=torch.long),
-            "energy": torch.tensor(prompt_ids["energy"], dtype=torch.long),
             "prompt_text": prompt_text,
         }
-
-    def _labels_to_ids(self, labels: Dict[str, str]) -> Dict[str, int]:
-        """Convert text labels → integer IDs."""
-        return {
-            "mood": MOOD_MAP.get(labels.get("mood", "peaceful"), 3),
-            "genre": GENRE_MAP.get(labels.get("genre", "fantasy"), 0),
-            "scene": SCENE_MAP.get(labels.get("scene", "village"), 2),
-            "tempo": TEMPO_MAP.get(labels.get("tempo", "moderate"), 2),
-            "instrument": INSTRUMENT_MAP.get(labels.get("instrument", "piano"), 0),
-            "energy": ENERGY_MAP.get(labels.get("energy", "medium"), 2),
-        }
-
-    def _labels_to_prompt_text(self, labels: Dict[str, str]) -> str:
-        """Display/logging only — model uses structured IDs, not free-text/BERT."""
-        return (
-            f"{labels.get('mood', 'peaceful')} | {labels.get('genre', 'fantasy')} | "
-            f"{labels.get('scene', 'village')} | {labels.get('tempo', 'moderate')} | "
-            f"{labels.get('instrument', 'piano')} | {labels.get('energy', 'medium')}"
-        )
 
     def save_labels(self, output_path: str):
         """
@@ -243,6 +238,7 @@ def create_dataloaders(
     batch_size: int = 16,
     val_split: float = 0.1,
     labels_file: Optional[str] = None,
+    captions_file: Optional[str] = None,
     max_files: Optional[int] = None,
     num_workers: int = 0,
     seed: int = 42,
@@ -263,6 +259,7 @@ def create_dataloaders(
         tokenizer=tokenizer,
         max_seq_len=max_seq_len,
         labels_file=labels_file,
+        captions_file=captions_file,
         max_files=max_files,
         pretokenize=pretokenize,
     )

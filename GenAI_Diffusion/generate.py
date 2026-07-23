@@ -1,9 +1,9 @@
 """
-Generate MIDI from improved diffusion checkpoint (CFG + clean decode).
+Generate MIDI from improved diffusion checkpoint (English text + MiniLM + CFG).
 
 Usage:
   python generate.py --checkpoint checkpoints/best_model.pt --epoch 30 --evaluate
-  python generate.py --checkpoint checkpoints/checkpoint_epoch_10.pt --epoch 10 --guidance_scale 4.0
+  python generate.py --checkpoint checkpoints/best_model.pt --prompt "Tense horror dungeon, slow organ"
 """
 
 from __future__ import annotations
@@ -19,14 +19,13 @@ import yaml
 
 from src.data.pianoroll import PROGRAM_MAP, pianoroll_to_midi
 from src.model.diffusion import GaussianDiffusion
-from src.model.prompt_encoder import PromptEncoder
+from src.model.prompt_encoder import TextPromptEncoder
 from src.model.unet import ConditionalUNet
 
-# Same structured schema as Transformer (compare.prompt_schema)
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
-from compare.prompt_schema import labels_to_ids, normalize_structured
+from compare.caption import entry_to_prompt_text, labels_to_english_caption, structured_fields_from_entry
 
 
 def load_config(path: str) -> dict:
@@ -41,7 +40,6 @@ def _resolve(base, p):
 
 
 def build_models(cfg: dict, ckpt: dict, device: torch.device):
-    # Prefer config stored in checkpoint (matches trained architecture)
     stored = ckpt.get("config") or {}
     model_cfg = stored.get("model") or cfg.get("model", {})
     diff_cfg = stored.get("diffusion") or cfg.get("diffusion", {})
@@ -59,14 +57,11 @@ def build_models(cfg: dict, ckpt: dict, device: torch.device):
         use_mid_attn=model_cfg.get("use_mid_attn", True),
         attn_heads=model_cfg.get("attn_heads", 4),
     )
-    prompt_encoder = PromptEncoder(
+    prompt_encoder = TextPromptEncoder(
         d_model=cond_dim,
-        num_moods=prompt_cfg.get("num_moods", 10),
-        num_genres=prompt_cfg.get("num_genres", 10),
-        num_scenes=prompt_cfg.get("num_scenes", 10),
-        num_tempos=prompt_cfg.get("num_tempos", 5),
-        num_instruments=prompt_cfg.get("num_instruments", 8),
-        num_energies=prompt_cfg.get("num_energies", 5),
+        model_name=prompt_cfg.get("text_model", "sentence-transformers/all-MiniLM-L6-v2"),
+        max_length=int(prompt_cfg.get("max_text_length", 64)),
+        freeze_backbone=True,
     )
     diffusion = GaussianDiffusion(
         unet,
@@ -77,7 +72,12 @@ def build_models(cfg: dict, ckpt: dict, device: torch.device):
         cond_drop_prob=0.0,
     )
     diffusion.load_state_dict(ckpt["diffusion_state_dict"], strict=False)
-    prompt_encoder.load_state_dict(ckpt["prompt_encoder_state_dict"], strict=False)
+    pe_sd = ckpt.get("prompt_encoder_state_dict", {})
+    if pe_sd:
+        if hasattr(prompt_encoder, "load_export_state_dict"):
+            prompt_encoder.load_export_state_dict(pe_sd, strict=False)
+        else:
+            prompt_encoder.load_state_dict(pe_sd, strict=False)
     return diffusion.to(device).eval(), prompt_encoder.to(device).eval(), pr_cfg, diff_cfg
 
 
@@ -87,16 +87,21 @@ def main():
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--epoch", type=int, default=0)
     parser.add_argument("--output_dir", type=str, default=None)
-    parser.add_argument("--prompts", type=str, default=None)
+    parser.add_argument("--prompts", type=str, default=None, help="JSON list of eval prompts")
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help="Single English prompt (overrides --prompts batch mode)",
+    )
     parser.add_argument("--sample_steps", type=int, default=None)
     parser.add_argument("--guidance_scale", type=float, default=None)
     parser.add_argument("--threshold", type=float, default=0.15)
-    parser.add_argument("--duration_sec", type=float, default=None,
-                        help="Target length in seconds (n_frames ≈ duration * fs). "
-                             "Default = config n_frames/fs (~10.6s). UNet is conv so length can vary.")
-    parser.add_argument("--n_frames", type=int, default=None, help="Override piano-roll width (advanced)")
+    parser.add_argument("--duration_sec", type=float, default=None)
+    parser.add_argument("--n_frames", type=int, default=None)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--evaluate", action="store_true")
+    parser.add_argument("--instrument", type=str, default=None, help="GM program hint for decode")
     args = parser.parse_args()
 
     base = os.path.dirname(os.path.abspath(__file__))
@@ -108,9 +113,14 @@ def main():
         else (args.device if args.device != "auto" else "cpu")
     )
 
-    prompts_path = args.prompts or _resolve(base, paths.get("eval_prompts", "../compare/eval_prompts.json"))
-    with open(prompts_path, "r", encoding="utf-8") as f:
-        prompts = json.load(f)
+    if args.prompt and args.prompt.strip():
+        prompts = [{"id": "gen", "text": args.prompt.strip()}]
+        if args.instrument:
+            prompts[0]["instrument"] = args.instrument
+    else:
+        prompts_path = args.prompts or _resolve(base, paths.get("eval_prompts", "../compare/eval_prompts.json"))
+        with open(prompts_path, "r", encoding="utf-8") as f:
+            prompts = json.load(f)
 
     out_dir = args.output_dir or _resolve(
         base, os.path.join(paths.get("outputs_dir", "outputs"), f"epoch_{args.epoch}")
@@ -127,12 +137,10 @@ def main():
     n_pitches = pr_cfg.get("pitch_max", 108) - pr_cfg.get("pitch_min", 21) + 1
     fs = pr_cfg.get("fs", 24)
     pitch_min = pr_cfg.get("pitch_min", 21)
-    # Duration: n_frames / fs ≈ seconds
     if args.n_frames is not None:
         n_frames = int(args.n_frames)
     elif args.duration_sec is not None:
         n_frames = max(32, int(round(args.duration_sec * fs)))
-        # keep divisible by 4 for UNet down/up sampling
         n_frames = max(32, (n_frames // 4) * 4)
     else:
         n_frames = pr_cfg.get("n_frames", 256)
@@ -141,23 +149,16 @@ def main():
     guidance = args.guidance_scale if args.guidance_scale is not None else diff_cfg.get("guidance_scale", 3.5)
 
     print(
-        f"[Generate] steps={sample_steps} guidance={guidance} "
+        f"[Generate] English text + MiniLM | steps={sample_steps} guidance={guidance} "
         f"frames={n_frames} fs={fs} → ~{duration_sec:.1f}s"
     )
 
     meta = {}
     t0 = time.perf_counter()
     for p in prompts:
-        labels = normalize_structured(**p)
-        ids = labels_to_ids(labels)
-        cond = prompt_encoder(
-            torch.tensor([ids["mood"]], device=device),
-            torch.tensor([ids["genre"]], device=device),
-            torch.tensor([ids["scene"]], device=device),
-            torch.tensor([ids["tempo"]], device=device),
-            torch.tensor([ids["instrument"]], device=device),
-            torch.tensor([ids["energy"]], device=device),
-        )
+        text = entry_to_prompt_text(p)
+        labels = structured_fields_from_entry(p)
+        cond = prompt_encoder(texts=[text], as_sequence=False)
         with torch.no_grad():
             roll = diffusion.sample(
                 shape=(1, 1, n_pitches, n_frames),
@@ -167,7 +168,7 @@ def main():
                 guidance_scale=guidance,
                 eta=diff_cfg.get("eta", 0.0),
             )
-        program = PROGRAM_MAP.get(labels["instrument"], 0)
+        program = PROGRAM_MAP.get(labels.get("instrument", "piano"), 0)
         midi = pianoroll_to_midi(
             roll[0].cpu().numpy(),
             pitch_min=pitch_min,
@@ -176,12 +177,12 @@ def main():
             threshold=args.threshold,
             min_duration_sec=0.06,
         )
-        fname = f"{p['id']}.mid"
+        fname = f"{p.get('id', 'gen')}.mid"
         for d in (out_dir, compare_out):
             midi.write(os.path.join(d, fname))
-        meta[fname] = {**labels, "id": p.get("id", "")}
+        meta[fname] = {**labels, "id": p.get("id", ""), "text": text}
         n_notes = sum(len(i.notes) for i in midi.instruments)
-        print(f"  saved {fname}  notes={n_notes}")
+        print(f"  saved {fname}  notes={n_notes}  |  {text}")
 
     total_t = time.perf_counter() - t0
     meta_path = os.path.join(compare_out, "meta.json")

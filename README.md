@@ -10,7 +10,8 @@
 | **So sánh + CSV** | `compare/` | split, eval prompts, metrics |
 | **Tài liệu** | `docs/` | HDSD, train, research, slide map |
 
-**Input chung:** `mood, genre, scene, tempo, instrument, energy` (không BERT).  
+**Input chung:** **một câu English** (free-text) → MiniLM freeze + projection.  
+Ví dụ: `"Happy fantasy village music, fast tempo, piano, medium energy"`  
 **Output chung:** file **MIDI** (`.mid`).
 
 ---
@@ -123,13 +124,23 @@ Nếu `CUDA out of memory` → hạ `--batch_size 16 --grad_accum 4`.
 ## Generate
 
 ```powershell
-# Transformer (~30s)
-cd D:\Master\Ky3\GenAI_Transformer
-python generate.py --mood happy --genre fantasy --scene village --tempo fast --instrument piano --duration_sec 30
+# (Sau khi train lại với text conditioning)
 
-# Diffusion (~10s mặc định config)
+# Transformer
+cd D:\Master\Ky3\GenAI_Transformer
+python generate.py --prompt "Happy fantasy village music, fast tempo, piano, medium energy" --duration_sec 30
+
+# Diffusion
 cd D:\Master\Ky3\GenAI_Diffusion
-python generate.py --checkpoint checkpoints/best_model.pt --epoch 10 --duration_sec 12 --evaluate
+python generate.py --checkpoint checkpoints/best_model.pt --epoch 10 `
+  --prompt "Tense horror dungeon theme, slow organ, high energy" --duration_sec 12 --evaluate
+```
+
+Build captions (optional, từ labels):
+
+```powershell
+cd D:\Master\Ky3
+python scripts/build_captions.py
 ```
 
 ## So sánh epoch 1 / 5 / 10
