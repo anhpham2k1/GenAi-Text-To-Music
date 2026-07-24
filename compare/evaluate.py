@@ -23,9 +23,11 @@ if ROOT not in sys.path:
 from compare.csv_logger import append_csv_row, write_csv
 from compare.midi_metrics import (
     aggregate_metrics,
+    build_ngram_reference,
     compare_to_reference,
     compute_midi_metrics,
     js_divergence,
+    memorization_overlap,
     pitch_class_histogram,
     reference_stats_from_dir,
 )
@@ -47,6 +49,8 @@ def evaluate_midi_dir(
     ref_midi_dir: Optional[str] = None,
     meta_path: Optional[str] = None,
     infer_time_sec: Optional[float] = None,
+    ngram_n: int = 8,
+    ngram_max_ref_files: int = 1000,
 ) -> Dict:
     os.makedirs(results_dir, exist_ok=True)
     meta = _load_prompt_meta(meta_path)
@@ -60,9 +64,13 @@ def evaluate_midi_dir(
 
     ref = {}
     ref_hist = None
+    ref_ngrams = set()
     if ref_midi_dir and os.path.isdir(ref_midi_dir):
         ref = reference_stats_from_dir(ref_midi_dir, max_files=150)
         ref_hist = ref.pop("ref_pitch_class_hist", None)
+        # Training-set pitch n-grams — flags generated pieces that copy
+        # training passages verbatim instead of composing novel sequences.
+        ref_ngrams = build_ngram_reference(ref_midi_dir, n=ngram_n, max_files=ngram_max_ref_files)
 
     per_file_rows: List[Dict] = []
     hists = []
@@ -86,6 +94,7 @@ def evaluate_midi_dir(
             h = pitch_class_histogram(path)
             hists.append(h)
             m["pitch_class_js_vs_ref"] = js_divergence(h, ref_hist)
+        m["memorization_ngram_overlap"] = memorization_overlap(path, ref_ngrams, n=ngram_n)
         per_file_rows.append(m)
 
     detail_csv = os.path.join(results_dir, f"{method}_quality_epoch_{epoch:03d}.csv")
@@ -121,7 +130,10 @@ def evaluate_midi_dir(
         print(
             f"  note_density={summary.get('note_density_mean', float('nan')):.3f} "
             f"silence={summary.get('silence_ratio_mean', float('nan')):.3f} "
-            f"inst_match={summary.get('instrument_match_mean', float('nan'))}"
+            f"inst_match={summary.get('instrument_match_mean', float('nan'))} "
+            f"groove={summary.get('groove_consistency_mean', float('nan')):.3f} "
+            f"scale={summary.get('scale_consistency_mean', float('nan')):.3f} "
+            f"memorization={summary.get('memorization_ngram_overlap_mean', float('nan')):.3f}"
         )
     return summary
 
@@ -135,6 +147,11 @@ def main():
     parser.add_argument("--ref_midi_dir", type=str, default=None)
     parser.add_argument("--meta", type=str, default=None, help="JSON map filename->prompt")
     parser.add_argument("--infer_time_sec", type=float, default=None)
+    parser.add_argument("--ngram_n", type=int, default=8, help="n-gram size for memorization check")
+    parser.add_argument(
+        "--ngram_max_ref_files", type=int, default=1000,
+        help="max training files sampled to build the memorization n-gram reference",
+    )
     args = parser.parse_args()
 
     results_dir = args.results_dir or os.path.join(ROOT, "compare", "results")
@@ -147,6 +164,8 @@ def main():
         ref_midi_dir=ref,
         meta_path=args.meta,
         infer_time_sec=args.infer_time_sec,
+        ngram_n=args.ngram_n,
+        ngram_max_ref_files=args.ngram_max_ref_files,
     )
 
 

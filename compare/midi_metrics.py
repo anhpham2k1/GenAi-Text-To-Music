@@ -45,6 +45,136 @@ def _safe_pretty_midi(path: str):
     return pretty_midi.PrettyMIDI(path)
 
 
+def _groove_consistency(midi, notes, steps_per_bar: int = 16) -> float:
+    """
+    Rhythmic self-similarity across consecutive bars (Wu & Yang 2020 /
+    MusPy 'groove_consistency'): quantize each bar's note onsets onto a
+    fixed-size grid, then average the fraction of matching grid steps
+    between every pair of consecutive bars. 1.0 = identical rhythm every
+    bar, low = rhythm changes bar to bar. NaN if there are fewer than 2 bars.
+    """
+    if not notes:
+        return float("nan")
+    try:
+        downbeats = midi.get_downbeats()
+    except Exception:
+        return float("nan")
+    if len(downbeats) < 2:
+        return float("nan")
+
+    bar_edges = list(downbeats) + [midi.get_end_time()]
+    onsets = sorted(n.start for n in notes)
+
+    patterns = []
+    oi = 0
+    for i in range(len(bar_edges) - 1):
+        start, end = bar_edges[i], bar_edges[i + 1]
+        dur = end - start
+        if dur <= 0:
+            continue
+        while oi < len(onsets) and onsets[oi] < start:
+            oi += 1
+        vec = np.zeros(steps_per_bar, dtype=bool)
+        j = oi
+        while j < len(onsets) and onsets[j] < end:
+            step = min(steps_per_bar - 1, int((onsets[j] - start) / dur * steps_per_bar))
+            vec[step] = True
+            j += 1
+        oi = j
+        patterns.append(vec)
+
+    if len(patterns) < 2:
+        return float("nan")
+    sims = [float(np.mean(a == b)) for a, b in zip(patterns[:-1], patterns[1:])]
+    return float(np.mean(sims))
+
+
+_MAJOR_SCALE = (0, 2, 4, 5, 7, 9, 11)
+_MINOR_SCALE = (0, 2, 3, 5, 7, 8, 10)
+
+
+def _scale_consistency(notes) -> float:
+    """
+    Largest fraction of notes that fit some major/minor scale (Wu & Yang
+    2020 'scale consistency'): try all 12 tonics x {major, minor}, return
+    the best-fitting scale's in-scale note ratio. High = tonal/coherent
+    pitch content, low = atonal/noisy.
+    """
+    if not notes:
+        return float("nan")
+    pitch_classes = [n.pitch % 12 for n in notes]
+    best = 0.0
+    for tonic in range(12):
+        for scale in (_MAJOR_SCALE, _MINOR_SCALE):
+            allowed = {(tonic + s) % 12 for s in scale}
+            frac = sum(1 for pc in pitch_classes if pc in allowed) / len(pitch_classes)
+            if frac > best:
+                best = frac
+    return float(best)
+
+
+def _ordered_pitch_sequence(midi) -> List[int]:
+    notes = sorted(
+        (n.start, n.pitch)
+        for inst in midi.instruments
+        if not inst.is_drum
+        for n in inst.notes
+    )
+    return [p for _, p in notes]
+
+
+def build_ngram_reference(midi_dir: str, n: int = 8, max_files: int = 1000, seed: int = 42) -> set:
+    """
+    Pool of pitch n-grams seen across a sample of the training set. Compare
+    a generated file's n-grams against this (memorization_overlap) to check
+    whether the model reproduces training passages verbatim instead of
+    generating novel sequences.
+    """
+    import random
+
+    files = []
+    for root, _, fnames in os.walk(midi_dir):
+        for f in fnames:
+            if f.lower().endswith((".mid", ".midi")):
+                files.append(os.path.join(root, f))
+    files.sort()
+    rng = random.Random(seed)
+    if len(files) > max_files:
+        files = rng.sample(files, max_files)
+
+    ngrams = set()
+    for path in files:
+        try:
+            midi = _safe_pretty_midi(path)
+        except Exception:
+            continue
+        pitches = _ordered_pitch_sequence(midi)
+        for i in range(len(pitches) - n + 1):
+            ngrams.add(tuple(pitches[i : i + n]))
+    return ngrams
+
+
+def memorization_overlap(midi_path: str, reference_ngrams: set, n: int = 8) -> float:
+    """
+    Fraction of this piece's pitch n-grams that already exist verbatim in
+    reference_ngrams (built by build_ngram_reference over the training
+    set). Higher = more likely copied/memorized rather than generated;
+    NaN if the piece has fewer than n notes or no reference is given.
+    """
+    if not reference_ngrams:
+        return float("nan")
+    try:
+        midi = _safe_pretty_midi(midi_path)
+    except Exception:
+        return float("nan")
+    pitches = _ordered_pitch_sequence(midi)
+    if len(pitches) < n:
+        return float("nan")
+    total = len(pitches) - n + 1
+    hit = sum(1 for i in range(total) if tuple(pitches[i : i + n]) in reference_ngrams)
+    return float(hit / total)
+
+
 def compute_midi_metrics(
     midi_path: str,
     prompt_instrument: Optional[str] = None,
@@ -78,6 +208,8 @@ def compute_midi_metrics(
         "dominant_group": -1.0,
         "instrument_match": float("nan"),
         "pitch_entropy": 0.0,
+        "groove_consistency": float("nan"),
+        "scale_consistency": float("nan"),
         "empty": 1.0,
     }
 
@@ -138,6 +270,9 @@ def compute_midi_metrics(
     p = p / p.sum()
     ent = float(-(p * np.log(p + 1e-12)).sum())
     out["pitch_entropy"] = ent
+
+    out["groove_consistency"] = _groove_consistency(midi, notes)
+    out["scale_consistency"] = _scale_consistency(notes)
 
     # Dominant instrument
     prog_note_counts = Counter()
