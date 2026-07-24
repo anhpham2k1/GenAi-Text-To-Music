@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import time
 from typing import Dict, List, Optional
 
 import torch
@@ -85,6 +87,17 @@ class DiffusionTrainer:
         os.makedirs(checkpoint_dir, exist_ok=True)
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(results_dir, exist_ok=True)
+
+        # Per-run archive so successive `python train.py` invocations don't
+        # overwrite each other's checkpoints. checkpoint_dir/best_model.pt
+        # etc. still always reflect the most recent run — every existing
+        # consumer (generate.py, ...) keeps working unchanged; the run
+        # archive under checkpoint_dir/runs/<run_id>/ is purely additive
+        # history (no resume support here yet, so no run_id continuity
+        # needed unlike the Transformer trainer).
+        self.run_id = time.strftime("%Y%m%d-%H%M%S")
+        self.run_dir = os.path.join(checkpoint_dir, "runs", self.run_id)
+        os.makedirs(self.run_dir, exist_ok=True)
 
         pe_params = (
             list(self.prompt_encoder.trainable_parameters())
@@ -235,6 +248,10 @@ class DiffusionTrainer:
         return total / max(1, n)
 
     def _save(self, name: str, epoch: int, use_ema_weights: bool = True):
+        """Save to checkpoint_dir/<name> (the "latest" location) and archive
+        an identical copy under checkpoint_dir/runs/<run_id>/<name> so this
+        run's checkpoints survive the next `python train.py` invocation.
+        """
         path = os.path.join(self.checkpoint_dir, name)
         applied = False
         if use_ema_weights and self.ema is not None:
@@ -256,6 +273,7 @@ class DiffusionTrainer:
                 "epoch": epoch,
                 "global_step": self.global_step,
                 "best_val_loss": self.best_val,
+                "run_id": self.run_id,
                 "diffusion_state_dict": self.diffusion.state_dict(),
                 "prompt_encoder_state_dict": pe_sd,
                 "optimizer_state_dict": self.optimizer.state_dict(),
@@ -263,6 +281,10 @@ class DiffusionTrainer:
                 "ema": self.ema.state_dict() if self.ema is not None else None,
             }
             torch.save(payload, path)
+            try:
+                shutil.copy2(path, os.path.join(self.run_dir, name))
+            except OSError as e:
+                print(f"[DiffusionTrainer] WARNING: could not archive checkpoint to {self.run_dir}: {e}")
             print(f"  [ckpt] {path}" + (" (EMA)" if applied else ""))
         finally:
             if applied:

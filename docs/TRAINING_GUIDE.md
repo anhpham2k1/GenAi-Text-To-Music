@@ -280,4 +280,83 @@ python -m compare.compare_results
 
 ---
 
+## 7. Pipeline nhanh — chạy local trên macOS (`.venv`)
+
+Từ build data đến test sinh nhạc, dùng `.venv` có sẵn ở gốc repo. Train thật nên
+chạy trên GPU thuê (Vast — xem `train_watchdog.sh` để tự resume khi crash); trên
+Mac (CPU/MPS) chỉ nên chạy smoke test trước khi đẩy lên GPU.
+
+### 7.1. Setup
+
+```bash
+cd /Users/tranbadat/Documents/study-projects/GenAi-Text-To-Music
+source .venv/bin/activate
+pip install -r GenAI_Transformer/requirements.txt
+python -c "import torch; print('mps:', torch.backends.mps.is_available(), '| cuda:', torch.cuda.is_available())"
+```
+
+### 7.2. Build data
+
+Chỉ cần chạy lại khi sửa `data/labels/labels.json` hoặc `compare/caption.py`:
+
+```bash
+python scripts/build_captions.py   # → data/labels/captions.json (5 caption/file, xem compare/caption.py)
+python -m compare.make_split        # chỉ khi compare/split.json chưa có / muốn tạo lại
+```
+
+### 7.3. Smoke test (bắt buộc trước khi train thật)
+
+```bash
+cd GenAI_Transformer
+python train.py --epochs 2 --batch_size 4 --max_seq_len 512 --max_files 500 --no_early_stop --device mps
+
+cd ../GenAI_Diffusion
+python train.py --epochs 2 --batch_size 2 --max_files 300
+```
+
+### 7.4. Train thật
+
+```bash
+cd GenAI_Transformer
+python train.py --epochs 30 --batch_size 8 --max_seq_len 1024 --no_early_stop --save_epochs "1,5,10,20,30"
+# Vast crash → bash train_watchdog.sh để tự resume
+
+cd ../GenAI_Diffusion
+python train.py --epochs 30 --batch_size 4
+```
+
+### 7.5. Test sinh nhạc bằng prompt tự do
+
+```bash
+cd GenAI_Transformer
+python generate.py --prompt "Happy fantasy village music, fast tempo, piano, medium energy" \
+  --duration_sec 30 --checkpoint checkpoints/best_model.pt
+
+cd ../GenAI_Diffusion
+python generate.py --checkpoint checkpoints/best_model.pt --epoch 30 \
+  --duration_sec 12 --guidance_scale 3.5 --sample_steps 80 --evaluate
+```
+
+### 7.6. Đánh giá + so sánh
+
+```bash
+cd /Users/tranbadat/Documents/study-projects/GenAi-Text-To-Music
+python -m compare.run_comparison_eval --epochs 1 5 10
+python -m compare.compare_results
+# → compare/results/comparison_table.csv
+```
+
+### 7.7. (Tuỳ chọn) Web demo
+
+```bash
+cd GenAI_Transformer
+uvicorn api.main:app --host 0.0.0.0 --port 8000
+# http://localhost:8000/docs — POST /generate {"prompt": "..."}
+```
+
+> **Checkpoint cũ (kiểu 6-attribute, trước bản MiniLM) không tương thích —**
+> **bước 7.4 bắt buộc train lại từ đầu, không load lại được checkpoint cũ.**
+
+---
+
 *Cập nhật theo cấu trúc repo: data ngoài `GenAI_Transformer/`, docs trong `docs/`.*

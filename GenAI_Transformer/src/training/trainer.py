@@ -14,6 +14,7 @@ Features:
 
 import os
 import math
+import shutil
 import sys
 import time
 import json
@@ -186,6 +187,17 @@ class Trainer:
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
 
+        # Per-run archive so successive `python train.py` invocations don't
+        # overwrite each other's checkpoints. checkpoint_dir/best_model.pt
+        # etc. still always reflect the most recent run — every existing
+        # consumer (generate.py, api/main.py, train_watchdog.sh) keeps
+        # working unchanged; the run archive is purely additive history.
+        # load_checkpoint() below reuses the saved run_id on resume so a
+        # crash/restart doesn't fragment one logical run into several.
+        self.run_id = time.strftime("%Y%m%d-%H%M%S")
+        self.run_dir = os.path.join(self.checkpoint_dir, "runs", self.run_id)
+        os.makedirs(self.run_dir, exist_ok=True)
+
         # Logging
         self.log_dir = log_dir
         os.makedirs(self.log_dir, exist_ok=True)
@@ -323,7 +335,15 @@ class Trainer:
         if "scaler" in checkpoint and self.scaler:
             self.scaler.load_state_dict(checkpoint["scaler"])
 
-        print(f"[Trainer] Resumed from {path} (global_step={self.global_step}, start_epoch={self.start_epoch}, best_val={self.best_val_loss:.4f})")
+        # Continue the same run archive across resumes (crash/restart via
+        # train_watchdog.sh) instead of fragmenting one logical run into
+        # several checkpoints/runs/<id>/ directories.
+        if "run_id" in checkpoint:
+            self.run_id = checkpoint["run_id"]
+            self.run_dir = os.path.join(self.checkpoint_dir, "runs", self.run_id)
+            os.makedirs(self.run_dir, exist_ok=True)
+
+        print(f"[Trainer] Resumed from {path} (run_id={self.run_id}, global_step={self.global_step}, start_epoch={self.start_epoch}, best_val={self.best_val_loss:.4f})")
         self._snapshot_good_weights()
 
     def train(self) -> Dict:
@@ -613,7 +633,15 @@ class Trainer:
         return total_loss / max(1, num_batches)
 
     def _save_checkpoint(self, filename: str, epoch: int = None):
-        """Save model checkpoint with resume info (MiniLM backbone stripped)."""
+        """Save model checkpoint with resume info (MiniLM backbone stripped).
+
+        Writes checkpoint_dir/<filename> — the "latest" location every other
+        script (generate.py, api/main.py, train_watchdog.sh) defaults to —
+        and also archives an identical copy under
+        checkpoint_dir/runs/<run_id>/<filename> so this run's checkpoints
+        survive the next `python train.py` invocation instead of being
+        overwritten by it.
+        """
         path = os.path.join(self.checkpoint_dir, filename)
         if hasattr(self.model, "export_state_dict"):
             model_sd = self.model.export_state_dict()
@@ -625,6 +653,7 @@ class Trainer:
             "global_step": self.global_step,
             "best_val_loss": self.best_val_loss,
             "epoch": epoch or 0,
+            "run_id": self.run_id,
             "config": {
                 "vocab_size": self.model.vocab_size,
                 "d_model": self.model.d_model,
@@ -636,3 +665,7 @@ class Trainer:
             save_dict["scaler"] = self.scaler.state_dict()
 
         torch.save(save_dict, path)
+        try:
+            shutil.copy2(path, os.path.join(self.run_dir, filename))
+        except OSError as e:
+            print(f"[Trainer] WARNING: could not archive checkpoint to {self.run_dir}: {e}")

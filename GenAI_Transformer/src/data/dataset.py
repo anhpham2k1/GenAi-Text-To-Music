@@ -9,7 +9,7 @@ import os
 import json
 import random
 import hashlib
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -72,14 +72,19 @@ class MidiDataset(Dataset):
             with open(labels_file, "r", encoding="utf-8") as f:
                 self.labels = json.load(f)
 
-        self.captions: Dict[str, str] = {}
+        # Each filename maps to either a single caption string or a list of
+        # paraphrase variants (see compare/caption.py); __getitem__ picks
+        # one variant at random per call when a list is present.
+        self.captions: Dict[str, Union[str, List[str]]] = {}
         if captions_file and os.path.exists(captions_file):
             with open(captions_file, "r", encoding="utf-8") as f:
                 self.captions = json.load(f)
             print(f"[MidiDataset] Loaded {len(self.captions)} captions from {captions_file}")
 
         # Cache tokenized data
-        self._cache: Dict[int, Tuple[List[int], str]] = {}
+        # Tokens only — captions are picked fresh in __getitem__ so a
+        # multi-variant captions.json gets resampled every epoch.
+        self._cache: Dict[int, List[int]] = {}
 
         print(f"[MidiDataset] Found {len(self.midi_files)} MIDI files in {midi_dir}")
 
@@ -144,12 +149,12 @@ class MidiDataset(Dataset):
                 - tokens: LongTensor (max_seq_len,)
                 - prompt_text: English caption (str)
         """
-        # Check cache
-        if idx in self._cache:
-            token_ids, prompt_text = self._cache[idx]
-        else:
-            midi_path = self.midi_files[idx]
+        midi_path = self.midi_files[idx]
 
+        # Check cache (tokens only)
+        if idx in self._cache:
+            token_ids = self._cache[idx]
+        else:
             # Tokenize MIDI
             try:
                 token_ids = self.tokenizer.encode(midi_path, self.max_seq_len)
@@ -172,24 +177,29 @@ class MidiDataset(Dataset):
                 token_ids = [self.tokenizer.bos_id, self.tokenizer.eos_id] + [self.tokenizer.pad_id] * (self.max_seq_len - 2)
                 token_ids = token_ids[: self.max_seq_len]
 
-            # Get labels → English caption
-            filename = os.path.basename(midi_path)
-            if filename in self.captions and str(self.captions[filename]).strip():
-                prompt_text = str(self.captions[filename]).strip()
-            else:
-                if filename in self.labels:
-                    raw_labels = self.labels[filename]
-                elif self.auto_label:
-                    try:
-                        raw_labels = self.tokenizer.auto_label(midi_path)
-                    except Exception:
-                        raw_labels = self.tokenizer._default_labels()
-                else:
-                    raw_labels = self.tokenizer._default_labels()
-                prompt_text = labels_to_english_caption(raw_labels)
+            self._cache[idx] = token_ids
 
-            # Cache
-            self._cache[idx] = (token_ids, prompt_text)
+        # Get labels → English caption. A list-valued entry (multiple
+        # paraphrase variants) is resampled every call, so the same file
+        # sees different phrasing across epochs instead of one fixed
+        # sentence memorized for its whole training run.
+        filename = os.path.basename(midi_path)
+        cap_entry = self.captions.get(filename)
+        if isinstance(cap_entry, list) and cap_entry:
+            prompt_text = str(random.choice(cap_entry)).strip()
+        elif isinstance(cap_entry, str) and cap_entry.strip():
+            prompt_text = cap_entry.strip()
+        else:
+            if filename in self.labels:
+                raw_labels = self.labels[filename]
+            elif self.auto_label:
+                try:
+                    raw_labels = self.tokenizer.auto_label(midi_path)
+                except Exception:
+                    raw_labels = self.tokenizer._default_labels()
+            else:
+                raw_labels = self.tokenizer._default_labels()
+            prompt_text = labels_to_english_caption(raw_labels)
 
         return {
             "tokens": torch.tensor(token_ids, dtype=torch.long),

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -24,7 +25,7 @@ class PianoRollDataset(Dataset):
         self,
         file_list: List[str],
         labels: Dict[str, dict],
-        captions: Optional[Dict[str, str]] = None,
+        captions: Optional[Dict[str, Union[str, List[str]]]] = None,
         pitch_min: int = 21,
         pitch_max: int = 108,
         n_frames: int = 256,
@@ -49,8 +50,14 @@ class PianoRollDataset(Dataset):
 
     def _caption_for(self, path: str) -> str:
         base = os.path.basename(path)
-        if base in self.captions and str(self.captions[base]).strip():
-            return str(self.captions[base]).strip()
+        cap_entry = self.captions.get(base)
+        # A list-valued entry (multiple paraphrase variants, see
+        # compare/caption.py) is resampled every call, so the same file
+        # sees different phrasing across epochs.
+        if isinstance(cap_entry, list) and cap_entry:
+            return str(random.choice(cap_entry)).strip()
+        if isinstance(cap_entry, str) and cap_entry.strip():
+            return cap_entry.strip()
         lab = self.labels.get(base, {})
         return labels_to_english_caption(lab)
 
@@ -82,7 +89,7 @@ def load_labels(labels_file: str) -> Dict[str, dict]:
     return {}
 
 
-def load_captions(captions_file: Optional[str]) -> Dict[str, str]:
+def load_captions(captions_file: Optional[str]) -> Dict[str, Union[str, List[str]]]:
     if captions_file and os.path.exists(captions_file):
         with open(captions_file, "r", encoding="utf-8") as f:
             return json.load(f)

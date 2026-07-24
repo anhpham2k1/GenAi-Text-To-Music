@@ -13,12 +13,15 @@ venv/
 env/
 
 # --- Data ---
-# Raw MIDI sources are huge (MidiCaps, MAESTRO, ComMU, ...) — do not commit
+# Nothing under data/ is committed anymore — rebuild it with
+# `python scripts/download_dataset.py` (see docs/DATA.md). Raw MIDI sources
+# are huge (MidiCaps, MAESTRO, ComMU, ...); processed/ + labels/ are
+# regenerated from them, so committing either just bloats the repo.
 data/raw/
-
-# Train set (processed + labels) is kept for training/repro — NOT ignored:
-#   data/processed/
-#   data/labels/
+data/processed/
+data/labels/*.json
+data/.dataset_build_state.json
+compare/split.json
 
 # --- Model checkpoints (both projects — do not commit) ---
 **/checkpoints/

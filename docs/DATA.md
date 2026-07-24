@@ -1,73 +1,89 @@
 # Dataset dùng chung (Transformer + Diffusion)
 
-Thư mục **`D:\Master\Ky3\data`** là kho data **ngoài** hai project.
+`data/` là kho data **ngoài** hai project. **Không còn commit vào git**
+(`data/raw/`, `data/processed/`, `data/labels/*.json`, `compare/split.json`
+đều gitignore) — build lại bằng 1 lệnh:
+
+```bash
+python scripts/download_dataset.py
+```
+
+Script tự tải MAESTRO + ComMU (nguồn public, không cần tài khoản), lọc/gán
+nhãn, rồi tự chạy `compare.make_split` + `scripts/build_captions.py`. Chạy
+lại an toàn (idempotent) — không tải/copy trùng nếu đã có sẵn. Xem
+`python scripts/download_dataset.py --help` cho các tuỳ chọn (`--sources`,
+`--force-remerge`).
 
 ```
-Ky3/
-├── data/                 ← BẠN ĐANG Ở ĐÂY (source of truth)
-│   ├── raw/              # MIDI gốc theo nguồn
-│   ├── processed/        # MIDI đã lọc (train)
-│   ├── labels/           # labels.json (6 attribute)
-│   └── README.md
-├── GenAI_Transformer/data  → junction trỏ về ../data
-├── GenAI_Diffusion/      # config trỏ ../data
-└── ComMU-code/           # code repo ComMU (meta đã copy vào raw/commu)
+data/
+├── raw/              # MIDI gốc theo nguồn (gitignore)
+├── processed/        # MIDI đã lọc, dùng để train (gitignore)
+├── labels/           # labels.json + captions.json (gitignore)
+└── README.md         # file này (có commit)
 ```
 
 ## raw/ — trạng thái
 
 | Thư mục | Vai trò | Ghi chú |
 |---------|---------|---------|
-| `maestro-v3.0.0/` | Piano chất lượng cao | Dataset **cũ** |
-| `midicaps/` | MIDI + caption (lớn) | Dataset **cũ** |
-| `midicaps_sample/` | Sample midicaps | Dataset **cũ** |
-| `commu/` | ComMU structured (genre/mood/inst…) | Dataset **mới** (~11k MIDI + `commu_meta.csv`) |
-| `vgmidi/` | Clone repo VGMIDI | Dataset **mới** — cần tải thêm file MIDI nếu repo trống |
-| `vgmusic/` | Game MIDI | Chưa có file — bỏ zip vào đây |
+| `maestro-v3.0.0/` | Piano chất lượng cao | Tự tải qua `download_dataset.py` |
+| `commu/` | ComMU structured (genre/mood/inst…) | Tự tải qua `download_dataset.py` (~11k MIDI + `commu_meta.csv`) |
+| `midicaps_sample/` | Sample MidiCaps | **Thủ công** — xem mục MidiCaps bên dưới |
+| `vgmidi/` | Clone repo VGMIDI | **Thủ công** — cần tải thêm file MIDI nếu repo trống |
+| `vgmusic/` | Game MIDI | **Thủ công** — chưa có file, bỏ zip vào đây |
 | `tegridy/`, `gigamidi/`, `lakh/` | Tuỳ chọn | Slot sẵn |
 
-## Train đang dùng (cập nhật sau merge ComMU)
+## Train đang dùng
 
-- `processed/` + `labels/labels.json`: **~14232** file  
-  - Legacy (MAESTRO/MidiCaps sample…): **3088**  
-  - ComMU (structured map từ `commu_meta.csv`): **11144**  
-- Split: `compare/split.json` — train **12809** / val **1423**  
-- Script merge lại: `python scripts/merge_commu.py`
+Sau `python scripts/download_dataset.py` (MAESTRO + ComMU, tự động):
 
-## Thêm MIDI mới rồi cập nhật train set
+- `processed/` + `labels/labels.json`: **~14641** file
+  - MAESTRO (lọc chất lượng qua `filter_midi_files`): **~409**
+  - ComMU (structured map từ `commu_meta.csv`): **11144**
+  - Legacy đã merge trước đó (MidiCaps một phần…): phần còn lại
+- Split: `compare/split.json` — tự chia train/val (~90/10), seed cố định nên
+  reproducible
+- `data/.dataset_build_state.json` — ghi nhớ nguồn nào đã merge, để chạy lại
+  script không bị copy trùng (dùng `--force-remerge` nếu cố tình muốn làm lại)
 
-```powershell
-cd D:\Master\Ky3\GenAI_Transformer
+## Thêm nguồn mới / merge lại thủ công
 
+`scripts/download_dataset.py` gọi đúng các hàm dưới đây — chỉ cần tự chạy
+tay khi muốn kiểm soát chi tiết hơn:
+
+```bash
+cd GenAI_Transformer
 python -c "
 from src.data.preprocessing import filter_midi_files, generate_labels
-filter_midi_files('../data/raw', '../data/processed', verbose=True)
+filter_midi_files('../data/raw/<nguồn>', '../data/processed', verbose=True)
 generate_labels('../data/processed', '../data/labels/labels.json')
 "
 
-cd D:\Master\Ky3
+cd ..
 python -m compare.make_split --midi_dir data/processed --split_path compare/split.json
+python scripts/build_captions.py
 ```
 
-Hoặc merge có metadata ComMU:
+Merge có metadata (giống ComMU — genre/inst/bpm → mood/genre/scene/tempo):
 
-```powershell
-cd D:\Master\Ky3\GenAI_Transformer
+```bash
+cd GenAI_Transformer
 python -c "
 from src.data.preprocessing import merge_and_process_datasets
 merge_and_process_datasets(
-    [
-        '../data/raw/maestro-v3.0.0',
-        '../data/raw/midicaps_sample',  # hoặc midicaps (rất lớn)
-        '../data/raw/commu',
-        '../data/raw/vgmusic',
-        '../data/raw/vgmidi',
-    ],
+    ['../data/raw/midicaps_sample', '../data/raw/vgmusic', '../data/raw/vgmidi'],
     processed_dir='../data/processed',
     labels_file='../data/labels/labels.json',
 )
 "
 ```
+
+## MidiCaps — vì sao không tự động tải được
+
+`amaai-lab/MidiCaps` (HuggingFace) chỉ chứa caption + đường dẫn trỏ vào
+**Lakh MIDI Dataset** (riêng, vài GB — https://colinraffel.com/projects/lmd/),
+không đóng gói sẵn file `.mid`. Cần tải Lakh, khớp theo path trong caption,
+rồi bỏ các file MIDI khớp vào `data/raw/midicaps_sample/`.
 
 ## VGMIDI — tải file nhạc
 

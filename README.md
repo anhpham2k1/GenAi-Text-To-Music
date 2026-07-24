@@ -49,6 +49,15 @@ pip install -r requirements.txt
 
 Cần: Python 3.10+, NVIDIA GPU (khuyến nghị), `pretty_midi`, `torch`.
 
+**Dataset không commit vào git** — build lại từ nguồn public trước khi train:
+
+```bash
+cd D:\Master\Ky3
+python scripts/download_dataset.py
+```
+
+Chi tiết: [data/README.md](data/README.md) / [docs/DATA.md](docs/DATA.md).
+
 ---
 
 ## Train nhanh
