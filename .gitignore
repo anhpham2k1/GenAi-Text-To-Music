@@ -63,3 +63,5 @@ desktop.ini
 *.tar
 *.tar.gz
 temp_*/
+report/*
+slides/*
