@@ -10,6 +10,7 @@
 | [DIFFUSION_IMPROVEMENTS.md](DIFFUSION_IMPROVEMENTS.md) | Cải tiến diffusion |
 | [HDSD_DATASET.md](HDSD_DATASET.md) | HDSD tải/lọc data |
 | [RESEARCH_REPORT.md](RESEARCH_REPORT.md) | Báo cáo nghiên cứu |
+| [PREPROCESSING.md](PREPROCESSING.md) | Sơ đồ và quy trình tiền xử lý dữ liệu |
 | [archive/](archive/) | README cũ (lưu trữ) |
 
 README tổng quan repo: [../README.md](../README.md)
